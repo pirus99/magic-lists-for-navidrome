@@ -95,7 +95,18 @@ class AIProvider:
                     response.raise_for_status()
                     
                     result = response.json()
-                    return result["choices"][0]["message"]["content"].strip()
+                    
+                    # Safely extract content with error handling
+                    try:
+                        content = result["choices"][0]["message"]["content"]
+                        if content is None:
+                            print(f"⚠️  AI service returned None content in response")
+                            return ""
+                        return content.strip()
+                    except (KeyError, AttributeError, TypeError) as e:
+                        print(f"⚠️  Failed to extract content from AI response: {e}")
+                        print(f"📋 Response structure: {result}")
+                        return ""
                     
                 except httpx.HTTPStatusError as e:
                     if e.response.status_code == 500:
@@ -140,7 +151,18 @@ class AIProvider:
             response.raise_for_status()
             
             result = response.json()
-            return result["choices"][0]["message"]["content"].strip()
+            
+            # Safely extract content with error handling
+            try:
+                content = result["choices"][0]["message"]["content"]
+                if content is None:
+                    print(f"⚠️  AI service returned None content in response")
+                    return ""
+                return content.strip()
+            except (KeyError, AttributeError, TypeError) as e:
+                print(f"⚠️  Failed to extract content from AI response: {e}")
+                print(f"📋 Response structure: {result}")
+                return ""
     
     async def _generate_google(self, system_prompt: str, user_prompt: str, max_tokens: int = 16000, temperature: float = 0.7) -> Union[str, NoReturn]:  # type: ignore
         """Handle Google AI's specific API format with controlled generation for JSON"""
@@ -245,7 +267,10 @@ class AIProvider:
                         if len(parts) > 0:
                             part = parts[0]
                             if "text" in part:
-                                text = part["text"].strip()
+                                text = part["text"]
+                                if text is None:
+                                    print(f"⚠️  Google AI service returned None text in response")
+                                    text = ""
 
                                 # Try to extract JSON from the response
                                 try:

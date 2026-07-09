@@ -1,9 +1,37 @@
 import httpx
 import os
 import json
+import re
 from typing import List, Dict, Any, Union, Tuple, Optional
 from .recipe_manager import recipe_manager
 from .services.ai_providers import get_ai_provider
+
+
+def clean_json_response(response: str) -> str:
+    """Clean JSON response by replacing problematic characters that break parsing.
+    
+    Args:
+        response: Raw JSON string from AI service
+        
+    Returns:
+        Cleaned JSON string safe for parsing
+    """
+    # Replace smart quotes and other problematic Unicode characters
+    cleaned = (
+        response
+        .replace('“', '"')
+        .replace('”', '"')
+        .replace('‘', "'")
+        .replace('’', "'")
+        .replace('–', "-")
+        .replace('—', "-")
+        .replace('…', "...")
+    )
+    
+    # Remove any control characters except newline and tab
+    cleaned = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', cleaned)
+    
+    return cleaned
 
 class AIClient:
     """Client for AI-powered track curation using configurable providers"""
@@ -212,6 +240,11 @@ Return JSON: {{"track_ids": [indices], "reasoning": "summary"}}"""
             # Log the full raw AI response for debugging
             print(f"🤖 FULL RAW AI RESPONSE for This Is: {content}")
 
+            # Handle empty response from AI provider
+            if not content or content.strip() == "":
+                print(f"⚠️  AI service returned empty response")
+                return self._fallback_rediscover_selection(candidate_tracks, num_tracks, include_reasoning, "AI service returned empty response")
+
             # Parse the JSON response with comprehensive validation
             try:
                 # Clean up the response and extract JSON
@@ -263,6 +296,9 @@ Return JSON: {{"track_ids": [indices], "reasoning": "summary"}}"""
                         cleaned_lines.append(line)
 
                 final_json = '\n'.join(cleaned_lines).strip()
+
+                # Clean the JSON response to handle problematic characters
+                final_json = clean_json_response(final_json)
 
                 # Try to parse the extracted JSON
                 response_data = json.loads(final_json)
@@ -496,6 +532,11 @@ Return JSON: {{"track_ids": [indices], "reasoning": "summary"}}"""
                     max_tokens=max_tokens,
                     temperature=temperature
                 )
+                
+                # Handle empty response from AI provider
+                if not content or content.strip() == "":
+                    print(f"⚠️  AI service returned empty response")
+                    return self._fallback_rediscover_selection(candidate_tracks, num_tracks, include_reasoning, "AI service returned empty response")
             else:
                 # Legacy recipe format fallback
                 prompt = final_recipe.get("prompt", "")
@@ -511,6 +552,11 @@ Return JSON: {{"track_ids": [indices], "reasoning": "summary"}}"""
                     max_tokens=max_tokens,
                     temperature=temperature
                 )
+
+            # Handle empty response from AI provider
+            if not content or content.strip() == "":
+                print(f"⚠️  AI service returned empty response")
+                return self._fallback_rediscover_selection(candidate_tracks, num_tracks, include_reasoning, "AI service returned empty response")
 
             # Parse the JSON response with comprehensive validation
             try:
@@ -563,6 +609,9 @@ Return JSON: {{"track_ids": [indices], "reasoning": "summary"}}"""
                         cleaned_lines.append(line)
 
                 final_json = '\n'.join(cleaned_lines).strip()
+                
+                # Clean the JSON response to handle problematic characters
+                final_json = clean_json_response(final_json)
 
                 # Try to parse the extracted JSON
                 result = json.loads(final_json)
@@ -659,9 +708,16 @@ Return JSON: {{"track_ids": [indices], "reasoning": "summary"}}"""
                 temperature=temperature
             )
 
+            # Handle empty response from AI provider
+            if not content or content.strip() == "":
+                print(f"⚠️  AI service returned empty response")
+                return ""
+
             # Try to parse as JSON, return as string if not
             try:
-                return json.loads(content)
+                # Clean the JSON response to handle problematic characters
+                cleaned_content = clean_json_response(content)
+                return json.loads(cleaned_content)
             except json.JSONDecodeError:
                 return content
 
@@ -814,6 +870,11 @@ Return JSON: {{"track_ids": [indices], "reasoning": "summary"}}"""
             # Log the full raw AI response for debugging
             print(f"🤖 FULL RAW AI RESPONSE for Genre Mix: {content}")
 
+            # Handle empty response from AI provider
+            if not content or content.strip() == "":
+                print(f"⚠️  AI service returned empty response")
+                return self._fallback_genre_mix_selection(tracks_json, num_tracks, include_reasoning, "AI service returned empty response")
+
             # Parse the JSON response with comprehensive validation
             try:
                 # Clean up the response and extract JSON
@@ -865,6 +926,9 @@ Return JSON: {{"track_ids": [indices], "reasoning": "summary"}}"""
                         cleaned_lines.append(line)
 
                 final_json = '\n'.join(cleaned_lines).strip()
+                
+                # Clean the JSON response to handle problematic characters
+                final_json = clean_json_response(final_json)
 
                 # Try to parse the extracted JSON
                 response_data = json.loads(final_json)
