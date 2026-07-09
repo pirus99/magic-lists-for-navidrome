@@ -188,6 +188,7 @@ class DatabaseManager:
                         songs=json.loads(row[3]),
                         reasoning=row[4],
                         navidrome_playlist_id=row[5],
+                        playlist_length=row[8],
                         created_at=row[6],
                         updated_at=row[7],
                         library_ids=json.loads(row[9]) if row[9] else []

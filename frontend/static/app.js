@@ -1,6 +1,6 @@
 // Global state for artist selection
 let selectedArtistId = null;
-let selectedGenre = null;
+let selectedGenres = [];
 let allArtists = [];
 let allGenres = [];
 let currentToast = null;
@@ -431,12 +431,13 @@ async function loadGenres() {
                 "hasSearch": true,
                 "searchPlaceholder": "Search...",
                 "searchClasses": "block w-full text-sm border-gray-200 rounded-lg focus:border-blue-500 focus:ring-blue-500 before:absolute before:inset-0 before:z-[1] py-2 px-3",
-                "searchWrapperClasses": "bg-white p-2 -mx-1 sticky top-0"
+                "searchWrapperClasses": "bg-white p-2 -mx-1 sticky top-0",
+                "multiple": true
             }));
         }
 
         // Clear any previous selection
-        selectedGenre = null;
+        selectedGenres = [];
 
         // Populate the select dropdown
         if (genreSelect) {
@@ -469,10 +470,11 @@ async function loadGenres() {
 
 // Handle genre selection change
 function handleGenreSelection(e) {
-    selectedGenre = e.target.value;
+    const selectedOptions = Array.from(e.target.selectedOptions).map(option => option.value);
+    selectedGenres = selectedOptions;
     const submitBtn = document.getElementById('create-genre-playlist-btn');
 
-    if (selectedGenre) {
+    if (selectedGenres.length > 0) {
         submitBtn.disabled = false;
     } else {
         submitBtn.disabled = true;
@@ -853,8 +855,8 @@ async function createArtistPlaylist() {
 async function createGenrePlaylist() {
     const submitBtn = document.getElementById('create-genre-playlist-btn');
 
-    if (!selectedGenre) {
-        showToast('error', 'Please select a genre first');
+    if (!selectedGenres || selectedGenres.length === 0) {
+        showToast('error', 'Please select at least one genre first');
         return;
     }
 
@@ -876,7 +878,7 @@ async function createGenrePlaylist() {
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-                genre: selectedGenre,
+                genres: selectedGenres,
                 refresh_frequency: refreshFrequency,
                 playlist_length: parseInt(playlistLength),
                 library_ids: selectedLibraryIds
@@ -896,11 +898,8 @@ async function createGenrePlaylist() {
             window.rybbit.event('Genre Mix Playlist Created', {
                 trackCount: data.songs ? data.songs.length : 0,
                 refreshFrequency: refreshFrequency,
-                genre: selectedGenre,
-                aiModel: modelInfo.model,
-                aiProvider: modelInfo.provider
-            });
-        }
+                genres: selectedGenres.join(', '),
+        })};
 
         // Show success toast
         showToast('success', `Playlist created with ${data.songs ? data.songs.length : 0} tracks`);

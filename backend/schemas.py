@@ -19,7 +19,7 @@ class CreatePlaylistRequest(BaseModel):
 
 class CreateGenrePlaylistRequest(BaseModel):
     """Request schema for creating a genre mix playlist"""
-    genre: str
+    genres: List[str]
     playlist_name: Optional[str] = None  # Optional, will auto-generate if not provided
     refresh_frequency: str = "none"  # "none", "daily", "weekly", "monthly"
     playlist_length: int = 25  # Number of tracks to include
@@ -34,6 +34,7 @@ class Playlist(BaseModel):
     reasoning: Optional[str] = None
     navidrome_playlist_id: Optional[str] = None
     library_ids: List[str] = []
+    playlist_length: Optional[int] = None
     created_at: str
     updated_at: str
 

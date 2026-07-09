@@ -671,16 +671,16 @@ Return JSON: {{"track_ids": [indices], "reasoning": "summary"}}"""
 
     async def curate_genre_mix(
         self,
-        genre: str,
+        genres: List[str],
         tracks_json: List[Dict[str, Any]],
         num_tracks: int = 20,
         include_reasoning: bool = False,
         variety_context: Optional[str] = None
     ) -> Union[List[str], Tuple[List[str], str]]:
-        """Curate a 'Genre Mix' playlist for a specific genre using AI
+        """Curate a 'Genre Mix' playlist for multiple genres using AI
 
         Args:
-            genre: Name of the genre
+            genres: List of genre names
             tracks_json: List of track dictionaries with id, title, album, year, play_count
             num_tracks: Number of tracks to select (default: 20)
             include_reasoning: Whether to return AI's reasoning along with track IDs
@@ -691,7 +691,8 @@ Return JSON: {{"track_ids": [indices], "reasoning": "summary"}}"""
         """
 
         if not self.api_key and self.provider.provider_type == "openrouter":
-            print(f"❌ No AI API key configured, using fallback curation for {genre}")
+            genre_names = ", ".join(genres)
+            print(f"❌ No AI API key configured, using fallback curation for {genre_names}")
             # Fallback: return first num_tracks by play count
             sorted_tracks = sorted(
                 tracks_json,
@@ -734,13 +735,14 @@ Return JSON: {{"track_ids": [indices], "reasoning": "summary"}}"""
                 print(f"❌ ERROR: No tracks available for curation!")
 
             # Use recipe system to generate prompt and get LLM parameters
+            genre_names = ", ".join(genres)
             recipe_inputs = {
-                "genre": genre,
+                "genres": genre_names,
                 "num_tracks": num_tracks,
                 "variety_context": variety_context or ""
             }
 
-            print(f"🍳 Applying recipe for {genre} ({num_tracks} tracks)")
+            print(f"🍳 Applying recipe for {genre_names} ({num_tracks} tracks)")
 
             final_recipe = recipe_manager.apply_recipe("genre_mix", recipe_inputs, include_reasoning)
 
@@ -786,7 +788,7 @@ Return JSON: {{"track_ids": [indices], "reasoning": "summary"}}"""
                 "recipe": recipe_without_tracks,
                 "available_tracks": indexed_tracks,  # INDEX-BASED tracks (no complex IDs)
                 "request": {
-                    "genre_name": genre,
+                    "genre_names": genre_names,
                     "desired_track_count": num_tracks,
                     "playlist_type": "genre_mix"
                 }
@@ -795,7 +797,7 @@ Return JSON: {{"track_ids": [indices], "reasoning": "summary"}}"""
             print(f"🔢 Using index-based approach for {len(track_id_map)} tracks")
 
             # Minimal payload for genre mix - only essential data
-            user_content = f"""Select {num_tracks} tracks for a {genre} playlist.
+            user_content = f"""Select {num_tracks} tracks for a playlist blending {genre_names}.
 
 Tracks: {json.dumps(indexed_tracks, separators=(',', ':'), ensure_ascii=False)}
 
