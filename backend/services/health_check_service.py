@@ -3,6 +3,8 @@ import httpx
 import asyncio
 import aiosqlite
 from typing import Dict, List, Any
+from google import genai
+
 class HealthCheckService:
     """Service to perform startup system checks for MagicLists application"""
     
@@ -534,7 +536,7 @@ class HealthCheckService:
             }
     
     async def _check_google_provider(self) -> Dict[str, str]:
-        """Check Google AI API key and connectivity"""
+        """Check Google AI API key and connectivity using Google AI SDK"""
         api_key = os.getenv("AI_API_KEY")
         model = os.getenv("AI_MODEL", "gemini-2.5-flash")
         
@@ -546,77 +548,75 @@ class HealthCheckService:
                 "suggestion": "Get a FREE API key at: https://ai.google.dev/ (generous free tier available)"
             }
         
-        # Test API connectivity with a minimal request
+        # Check if Google AI SDK is available
+        if genai is None:
+            return {
+                "name": "Google AI Provider",
+                "status": "warning",
+                "message": "Google AI SDK not available - install google-genai package",
+                "suggestion": "Run 'pip install google-genai' to enable Google AI provider checks"
+            }
+        
+        # Test API connectivity using Google AI SDK
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-                
-                # Minimal test payload for Google AI
-                payload = {
-                    "contents": [{
-                        "parts": [{
-                            "text": "test"
-                        }]
-                    }],
-                    "generationConfig": {
-                        "maxOutputTokens": 1
-                    }
+            # Create client with API key
+            client = genai.Client(api_key=api_key)
+            
+            # Test with a minimal request
+            response = client.models.generate_content(
+                model=model,
+                contents="test",
+                config={"max_output_tokens": 1}
+            )
+            
+            # Check response
+            if response.text is not None:
+                return {
+                    "name": "Google AI Provider",
+                    "status": "success",
+                    "message": f"API key valid and service reachable (model: {model})",
+                    "suggestion": ""
+                }
+            else:
+                return {
+                    "name": "Google AI Provider",
+                    "status": "warning",
+                    "message": "API key valid but no response received",
+                    "suggestion": "Google AI service may have issues or quota limitations"
                 }
                 
-                response = await client.post(url, json=payload)
-                
-                if response.status_code == 200:
-                    return {
-                        "name": "Google AI Provider",
-                        "status": "success",
-                        "message": f"API key valid and service reachable (model: {model})",
-                        "suggestion": ""
-                    }
-                elif response.status_code == 400:
-                    error_text = response.text
-                    if "API_KEY_INVALID" in error_text:
-                        return {
-                            "name": "Google AI Provider",
-                            "status": "error",
-                            "message": "Invalid API key - check your AI_API_KEY in .env file",
-                            "suggestion": "Verify your Google AI API key is correct at https://ai.google.dev/"
-                        }
-                    elif "QUOTA_EXCEEDED" in error_text:
-                        return {
-                            "name": "Google AI Provider",
-                            "status": "warning",
-                            "message": "API key valid but quota exceeded",
-                            "suggestion": "Your Google AI free tier quota has been exceeded. Check usage at https://ai.google.dev/"
-                        }
-                    else:
-                        return {
-                            "name": "Google AI Provider",
-                            "status": "warning",
-                            "message": f"API key provided but request failed: {error_text[:100]}...",
-                            "suggestion": "Check your Google AI API key and model configuration"
-                        }
-                else:
-                    return {
-                        "name": "Google AI Provider",
-                        "status": "warning",
-                        "message": f"API key provided but service returned status {response.status_code}",
-                        "suggestion": "API key is configured but Google AI service may have issues"
-                    }
-                    
-        except httpx.ConnectError:
-            return {
-                "name": "Google AI Provider",
-                "status": "warning",
-                "message": "API key provided but could not connect to Google AI service",
-                "suggestion": "Check your internet connection and Google AI service status"
-            }
         except Exception as e:
-            return {
-                "name": "Google AI Provider",
-                "status": "warning",
-                "message": f"API key provided but connectivity test failed: {str(e)}",
-                "suggestion": "API key is configured but service connectivity could not be verified"
-            }
+            error_message = str(e)
+            
+            # Handle specific error cases
+            if "API_KEY_INVALID" in error_message or "invalid api key" in error_message.lower():
+                return {
+                    "name": "Google AI Provider",
+                    "status": "error",
+                    "message": "Invalid API key - check your AI_API_KEY in .env file",
+                    "suggestion": "Verify your Google AI API key is correct at https://ai.google.dev/"
+                }
+            elif "QUOTA_EXCEEDED" in error_message or "RESOURCE_EXHAUSTED" in error_message:
+                return {
+                    "name": "Google AI Provider",
+                    "status": "warning",
+                    "message": "API key valid but quota exceeded",
+                    "suggestion": "Your Google AI free tier quota has been exceeded. Check usage at https://ai.google.dev/"
+                }
+            elif "INVALID_ARGUMENT" in error_message or "model not found" in error_message.lower():
+                return {
+                    "name": "Google AI Provider",
+                    "status": "error",
+                    "message": f"Invalid model or configuration: {error_message[:100]}...",
+                    "suggestion": "Check your AI_MODEL configuration in .env file"
+                }
+            else:
+                return {
+                    "name": "Google AI Provider",
+                    "status": "warning",
+                    "message": f"API key provided but connectivity test failed: {error_message[:100]}...",
+                    "suggestion": "Check your internet connection and Google AI service status"
+                }
     
     async def _check_navidrome_library_config(self) -> Dict[str, str]:
         """Check if Navidrome library configuration is present"""

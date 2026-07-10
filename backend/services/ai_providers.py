@@ -4,6 +4,8 @@ import json
 import re
 from typing import Optional, Dict, Any, Union, NoReturn
 from dataclasses import dataclass
+from google import genai
+
 
 @dataclass
 class ProviderConfig:
@@ -165,9 +167,11 @@ class AIProvider:
                 return ""
     
     async def _generate_google(self, system_prompt: str, user_prompt: str, max_tokens: int = 16000, temperature: float = 0.7) -> Union[str, NoReturn]:  # type: ignore
-        """Handle Google AI's specific API format with controlled generation for JSON"""
-        url = f"{self.base_url}/models/{self.model}:generateContent?key={self.api_key}"
-
+        """Handle Google AI's specific API format with controlled generation for JSON using Google AI SDK"""
+        
+        if genai is None:
+            raise Exception("Google AI SDK not available. Please install google-genai package.")
+        
         # Add JSON-specific instructions to the prompt
         combined_prompt = f"""
         {system_prompt}
@@ -181,118 +185,47 @@ class AIProvider:
 
         # For genre mix, responses are small JSON, so cap output tokens reasonably
         if "Genre Mix" in system_prompt or "genre_mix" in user_prompt.lower():
-            # max_output = 2500  # Genre mix responses are ~500 tokens
             max_output = min(int(max_tokens), 16000)
         else:
             max_output = min(int(max_tokens), 16000)
 
-        generation_config = {
-            "temperature": temperature,
-            "maxOutputTokens": max_output
-        }
-
-        payload = {
-            "contents": [{
-                "parts": [{
-                    "text": combined_prompt
-                }]
-            }],
-            "generationConfig": generation_config
-        }
-
-        headers = {"Content-Type": "application/json"}
-
-        # Debug: Save payload to file for inspection
-        import json
-        import time
-        timestamp = int(time.time())
-
-        # Add debug info to payload
-        debug_info = {
-            "timestamp": timestamp,
-            "model": self.model,
-            "max_tokens_param": max_tokens,
-            "max_output_tokens_calculated": generation_config.get("maxOutputTokens"),
-            "combined_prompt_length": len(combined_prompt),
-            "system_prompt_length": len(system_prompt),
-            "user_prompt_length": len(user_prompt),
-            "is_genre_mix": "Genre Mix" in system_prompt or "genre_mix" in user_prompt.lower()
-        }
-
-        payload_with_debug = {
-            "debug_info": debug_info,
-            "payload": payload
-        }
-
-        payload_file = f"payloads/google_ai_payload_{timestamp}.json"
-        with open(payload_file, 'w') as f:
-            json.dump(payload, f, indent=2)
-        print(f"📄 Saved payload to {payload_file} (prompt: ~{len(combined_prompt)//4} tokens)")
-
         try:
-            response = await self.client.post(
-                url,
-                json=payload,
-                headers=headers,
-                timeout=60.0
+            # Create the client with API key
+            client = genai.Client(api_key=self.api_key)
+            
+            # Generate content using the SDK
+            response = client.models.generate_content(
+                model=self.model,
+                contents=combined_prompt,
+                config={
+                    "temperature": temperature,
+                    "max_output_tokens": max_output
+                }
             )
-            response.raise_for_status()
 
-            result = response.json()
+            # Get the text response
+            text = response.text
+            if text is None:
+                print(f"⚠️  Google AI service returned None text in response")
+                text = ""
 
-            if "candidates" in result and len(result["candidates"]) > 0:
-                candidate = result["candidates"][0]
+            # Try to extract JSON from the response
+            try:
+                # First try direct JSON parsing
+                json_response = json.loads(text)
+                return json.dumps(json_response, ensure_ascii=False)
+            except json.JSONDecodeError:
+                # Try to find JSON within the text (in case of extra content)
+                json_match = re.search(r'\{.*\}', text, re.DOTALL)
+                if json_match:
+                    try:
+                        json_response = json.loads(json_match.group())
+                        return json.dumps(json_response, ensure_ascii=False)
+                    except json.JSONDecodeError:
+                        pass
 
-                # Check finish reason 
-                finish_reason = candidate.get("finishReason", "")
-                if finish_reason:
-                    if finish_reason in ["SAFETY", "RECITATION", "OTHER"]:
-                        raise Exception(f"Google AI blocked the response due to: {finish_reason}")
-                    elif finish_reason == "MAX_TOKENS":
-                        # This means output hit the limit, not input
-                        prompt_tokens = result.get('usageMetadata', {}).get('promptTokenCount', 'unknown')
-                        output_tokens = result.get('usageMetadata', {}).get('candidatesTokenCount', 'unknown')
-                        raise Exception( 
-                            f"Google AI response incomplete: output hit {max_output} token limit. "
-                            f"Input: {prompt_tokens} tokens, Output: {output_tokens} tokens. "
-                            f"Increase max_tokens parameter if you need longer responses."
-                        )
-
-                # Parse the actual content
-                if "content" in candidate:
-                    content = candidate["content"]
-
-                    if "parts" in content and isinstance(content["parts"], list):
-                        parts = content["parts"]
-                        if len(parts) > 0:
-                            part = parts[0]
-                            if "text" in part:
-                                text = part["text"]
-                                if text is None:
-                                    print(f"⚠️  Google AI service returned None text in response")
-                                    text = ""
-
-                                # Try to extract JSON from the response
-                                try:
-                                    # First try direct JSON parsing
-                                    json_response = json.loads(text)
-                                    return json.dumps(json_response, ensure_ascii=False)
-                                except json.JSONDecodeError:
-                                    # Try to find JSON within the text (in case of extra content)
-                                    json_match = re.search(r'\{.*\}', text, re.DOTALL)
-                                    if json_match:
-                                        try:
-                                            json_response = json.loads(json_match.group())
-                                            return json.dumps(json_response, ensure_ascii=False)
-                                        except json.JSONDecodeError:
-                                            pass
-
-                                    # If all else fails, return the text as-is and let upstream handle it
-                                    return text
-
-                raise Exception("Google AI response missing content structure")
-
-            raise Exception("Google AI response missing candidates array")
+                # If all else fails, return the text as-is and let upstream handle it
+                return text
 
         except Exception as e:
             raise Exception(f"Google AI error: {str(e)}")
