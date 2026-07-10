@@ -19,8 +19,8 @@ def clean_json_response(response: str) -> str:
     # Replace smart quotes and other problematic Unicode characters
     cleaned = (
         response
-        .replace('“', '"')
-        .replace('”', '"')
+        .replace('“', "'")
+        .replace('”', "'")
         .replace('‘', "'")
         .replace('’', "'")
         .replace('–', "-")
@@ -32,6 +32,14 @@ def clean_json_response(response: str) -> str:
     cleaned = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', cleaned)
     
     return cleaned
+
+def clean_prompt(prompt):
+    # Remove curly braces and their contents
+    prompt = prompt.replace('{', '')
+    prompt = prompt.replace('}', '')
+    # Remove double quotes
+    prompt = prompt.replace('"', '')
+    return prompt.strip()
 
 class AIClient:
     """Client for AI-powered track curation using configurable providers"""
@@ -156,12 +164,12 @@ class AIClient:
                     
                     # Create indexed track (minimal essential data to reduce token usage)
                     indexed_track = {
-                        "index": index,
-                        "track_name": track.get("title", "Unknown"),
-                        "album": track.get("album", "Unknown"),
-                        "year": track.get("year", 0),
-                        "play_count": track.get("play_count", 0),
-                        "local_library_likes": track.get("local_library_likes", False)
+                        "i": index,
+                        "t": track.get("title", "Unknown"),
+                        "r": track.get("album", "Unknown"),
+                        "y": track.get("year", 0),
+                        "p": track.get("play_count", 0),
+                        "l": track.get("local_library_likes", False)
                     }
                     indexed_tracks.append(indexed_track)
                 
@@ -178,11 +186,13 @@ class AIClient:
                 print(f"🔢 Using index-based approach for {len(track_id_map)} tracks")
 
                 # Minimal payload for "This Is" - only essential data
-                user_content = f"""Select up to {num_tracks} tracks for a "This Is {artist_name}" playlist. If fewer than {num_tracks} tracks are available, select all available tracks.
-
-Tracks: {json.dumps(indexed_tracks, separators=(',', ':'), ensure_ascii=False)}
-
-Return JSON: {{"track_ids": [indices], "reasoning": "summary"}}"""
+                # Clean the tracks list to save tokens
+                tracks_json_str = json.dumps(indexed_tracks, separators=(',', ':'), ensure_ascii=False)
+                cleaned_tracks = clean_prompt(tracks_json_str)
+                
+                user_content = f"""Select up to {num_tracks} tracks for a "This Is {artist_name}" playlist. 
+                                If fewer than {num_tracks} tracks are available, select all available tracks.
+                                Tracks: {cleaned_tracks} Return JSON: {{"track_ids": [indices], "reasoning": "summary"}}"""
                 
                 payload = {
                     "model": model,
@@ -517,9 +527,13 @@ Return JSON: {{"track_ids": [indices], "reasoning": "summary"}}"""
                 }
 
                 # Minimal payload for re-discover - only essential data
+                # Clean the tracks list to save tokens
+                tracks_json_str = json.dumps(indexed_tracks, separators=(',', ':'), ensure_ascii=False)
+                cleaned_tracks = clean_prompt(tracks_json_str)
+                
                 user_content = f"""Select {num_tracks} tracks for a Re-Discover Weekly playlist.
 
-Tracks: {json.dumps(indexed_tracks, separators=(',', ':'), ensure_ascii=False)}
+Tracks: {cleaned_tracks}
 
 Return JSON: {{"track_ids": [indices], "reasoning": "summary"}}"""
 
@@ -832,11 +846,12 @@ Return JSON: {{"track_ids": [indices], "reasoning": "summary"}}"""
 
                 # Create indexed track (minimal essential data to reduce token usage)
                 indexed_track = {
-                    "index": index,
-                    "track_name": track.get("title", "Unknown"),
-                    "artist": track.get("artist", "Unknown"),
-                    "play_count": track.get("play_count", 0),
-                    "local_library_likes": track.get("local_library_likes", False)
+                    "i": index,
+                    "t": track.get("title", "Unknown"),
+                    "a": track.get("artist", "Unknown"),
+                    "r": track.get("album", "Unknown"),
+                    "p": track.get("play_count", 0),
+                    "l": track.get("local_library_likes", False)
                 }
                 indexed_tracks.append(indexed_track)
 
@@ -853,11 +868,12 @@ Return JSON: {{"track_ids": [indices], "reasoning": "summary"}}"""
             print(f"🔢 Using index-based approach for {len(track_id_map)} tracks")
 
             # Minimal payload for genre mix - only essential data
-            user_content = f"""Select {num_tracks} tracks for a playlist blending {genre_names}.
-
-Tracks: {json.dumps(indexed_tracks, separators=(',', ':'), ensure_ascii=False)}
-
-Return JSON: {{"track_ids": [indices], "reasoning": "summary"}}"""
+            # Clean the tracks list to save tokens
+            tracks_json_str = json.dumps(indexed_tracks, separators=(',', ':'), ensure_ascii=False)
+            cleaned_tracks = clean_prompt(tracks_json_str)
+            
+            user_content = f"""Select {num_tracks} tracks for a {genre_names} playlist.
+                            Tracks: {cleaned_tracks}"""
 
             # Use the provider to make the AI request
             content = await self.provider.generate(

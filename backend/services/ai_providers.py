@@ -30,9 +30,9 @@ class AIProviderConfig:
             signup_url="https://console.groq.com/"
         ),
         "google": ProviderConfig(
-            base_url="https://generativelanguage.googleapis.com/v1beta",
+            base_url="https://generativelanguage.googleapis.com/v1beta/interactions",
             requires_key=True,
-            default_model="gemini-2.5-flash",
+            default_model="gemini-3.5-flash",
             signup_url="https://ai.google.dev/"
         ),
         "ollama": ProviderConfig(
