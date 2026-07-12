@@ -8,3 +8,4 @@ python-multipart>=0.0.6
 apscheduler>=3.10.4
 python-dotenv>=1.0.0
 google-genai>=1.0.0
+json-minify>=0.3.0

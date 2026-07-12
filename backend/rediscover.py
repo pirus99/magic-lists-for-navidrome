@@ -333,7 +333,7 @@ class RediscoverWeekly:
             recipe_inputs = {
                 "num_tracks": max_tracks,
                 "analysis_summary": analysis_summary,
-                "candidate_tracks_json": "[]"  # Placeholder for now
+                "candidate_candidate_tracks": "[]"  # Placeholder for now
             }
             
             # Step 3: Score tracks for re-discovery with new rediscovery_score calculation
@@ -388,10 +388,10 @@ class RediscoverWeekly:
             if use_ai:
                 # Update recipe inputs with actual candidate tracks
                 import json
-                recipe_inputs["candidate_tracks_json"] = json.dumps(ai_candidates, indent=2)
+                recipe_inputs["candidate_candidate_tracks"] = json.dumps(ai_candidates, indent=2)
                 
                 # Apply recipe with all placeholders resolved
-                final_recipe = recipe_manager.apply_recipe("re_discover", recipe_inputs, include_reasoning=True)
+                final_recipe = recipe_manager.apply_recipe("re_discover", recipe_inputs, include_description=True)
 
                 # Recipe configuration applied silently
                 
@@ -407,15 +407,15 @@ class RediscoverWeekly:
                             candidate_tracks=ai_candidates,
                             analysis_summary=analysis_summary,
                             num_tracks=max_tracks,
-                            include_reasoning=True,
+                            include_description=True,
                             variety_context=variety_context
                         )
                         
                         if isinstance(ai_result, tuple):
-                            curated_track_ids, reasoning = ai_result
+                            curated_track_ids, description = ai_result
                         else:
                             curated_track_ids = ai_result
-                            reasoning = ""
+                            description = ""
                         
                         # Create final playlist with AI selections
                         playlist_tracks = []
@@ -433,7 +433,7 @@ class RediscoverWeekly:
                                     "historical_plays": candidate["play_count"],
                                     "days_since_last_play": candidate["days_since_last_play"],
                                     "ai_curated": True,
-                                    "ai_reasoning": reasoning if reasoning else "AI curation applied"
+                                    "ai_description": description if description else "AI curation applied"
                                 })
                         
                         if playlist_tracks:
@@ -459,7 +459,7 @@ class RediscoverWeekly:
                     "historical_plays": stats["total_plays"],
                     "days_since_last_play": (datetime.now() - stats["last_play"]).days if stats["last_play"] else "30+",
                     "ai_curated": False,
-                    "ai_reasoning": "Algorithmic selection used (AI not available or failed)"
+                    "ai_description": "Algorithmic selection used (AI not available or failed)"
                 })
             
             return playlist_tracks
@@ -797,7 +797,7 @@ class ReDiscoverV2Processor:
                 "exclude_played_within_days": 30,
                 "prioritize_starred": True
             },
-            "reasoning": "Fallback strategy due to AI unavailability"
+            "description": "Fallback strategy due to AI unavailability"
         }
 
     async def _execute_searches(self, theme_strategy: Dict[str, Any], library_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
@@ -955,15 +955,15 @@ class ReDiscoverV2Processor:
                 candidate_tracks=ai_candidates,
                 analysis_summary="",  # Could be enhanced with theme_strategy info
                 num_tracks=self.config["track_count"],
-                include_reasoning=True,
+                include_description=True,
                 variety_context=json.dumps(theme_strategy) if theme_strategy else None
             )
 
             if isinstance(ai_result, tuple):
-                track_ids, reasoning = ai_result
+                track_ids, description = ai_result
             else:
                 track_ids = ai_result
-                reasoning = ""
+                description = ""
 
             # Build final track list
             final_tracks = []
@@ -974,7 +974,7 @@ class ReDiscoverV2Processor:
                     final_tracks.append({
                         **candidate,
                         "ai_curated": True,
-                        "ai_reasoning": reasoning
+                        "ai_description": description
                     })
 
             if len(final_tracks) == self.config["track_count"]:
@@ -983,14 +983,14 @@ class ReDiscoverV2Processor:
         except Exception as e:
             print(f"❌ Phase 2 AI failed: {e}")
             # Update theme strategy to reflect AI failure
-            theme_strategy["reasoning"] = "Fallback strategy due to AI unavailability"
+            theme_strategy["description"] = "Fallback strategy due to AI unavailability"
 
         # Fallback: Score-based selection
         top_candidates = candidates[:self.config["track_count"]]
         return [{
             **track,
             "ai_curated": False,
-            "ai_reasoning": "Algorithmic selection (AI not available)"
+            "ai_description": "Algorithmic selection (AI not available)"
         } for track in top_candidates]
 
     async def _create_playlist_data(self, tracks: List[Dict[str, Any]], theme_strategy: Dict[str, Any], user_id: str, server_id: str) -> Dict[str, Any]:
@@ -1000,7 +1000,7 @@ class ReDiscoverV2Processor:
             "tracks": tracks,
             "theme": theme_strategy.get("theme_identified", "Mixed"),
             "mode": theme_strategy.get("selected_mode", "A"),
-            "reasoning": theme_strategy.get("reasoning", ""),
+            "description": theme_strategy.get("description", ""),
             "user_id": user_id,
             "server_id": server_id,
             "generated_at": datetime.now().isoformat()
@@ -1043,11 +1043,11 @@ class ReDiscoverV2Processor:
                         "tracks": [{
                             **track,
                             "ai_curated": False,
-                            "ai_reasoning": "Fallback: Using starred tracks (limited recent listening history)"
+                            "ai_description": "Fallback: Using starred tracks (limited recent listening history)"
                         } for track in fallback_tracks],
                         "theme": "Starred Favorites",
                         "mode": "FALLBACK",
-                        "reasoning": "Insufficient listening history in target period. Using starred tracks instead.",
+                        "description": "Insufficient listening history in target period. Using starred tracks instead.",
                         "user_id": user_id,
                         "server_id": server_id,
                         "generated_at": datetime.now().isoformat(),
@@ -1073,11 +1073,11 @@ class ReDiscoverV2Processor:
                     "tracks": [{
                         **track,
                         "ai_curated": False,
-                        "ai_reasoning": "Basic fallback: Using highest-played tracks (very limited listening history)"
+                        "ai_description": "Basic fallback: Using highest-played tracks (very limited listening history)"
                     } for track in fallback_tracks],
                     "theme": "Library Favorites",
                     "mode": "BASIC_FALLBACK",
-                    "reasoning": "No recent listening history found. Using your most-played tracks instead.",
+                    "description": "No recent listening history found. Using your most-played tracks instead.",
                     "user_id": user_id,
                     "server_id": server_id,
                     "generated_at": datetime.now().isoformat(),

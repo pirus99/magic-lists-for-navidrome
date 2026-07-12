@@ -22,16 +22,16 @@ class DatabaseManager:
                     artist_id TEXT NOT NULL,
                     playlist_name TEXT NOT NULL,
                     songs TEXT, -- JSON array of song titles
-                    reasoning TEXT, -- AI reasoning/description
+                    description TEXT, -- AI description/description
                     navidrome_playlist_id TEXT, -- Link to Navidrome playlist
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
 
-            # Add reasoning column if it doesn't exist (for existing databases)
+            # Add description column if it doesn't exist (for existing databases)
             try:
-                await db.execute("ALTER TABLE playlists ADD COLUMN reasoning TEXT")
+                await db.execute("ALTER TABLE playlists ADD COLUMN description TEXT")
             except:
                 # Column already exists or other error - ignore
                 pass
@@ -129,7 +129,7 @@ class DatabaseManager:
                     tracks_analyzed_count INTEGER NOT NULL,
                     track_ids_json TEXT NOT NULL,  -- JSON array of track IDs
                     track_count INTEGER NOT NULL,
-                    reasoning TEXT,
+                    description TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
@@ -157,7 +157,7 @@ class DatabaseManager:
 
             await db.commit()
     
-    async def create_playlist(self, artist_id: str, playlist_name: str, songs: Optional[List[str]] = None, reasoning: Optional[str] = None, navidrome_playlist_id: Optional[str] = None, playlist_length: Optional[int] = None, library_ids: Optional[List[str]] = None) -> Optional[Playlist]:
+    async def create_playlist(self, artist_id: str, playlist_name: str, songs: Optional[List[str]] = None, description: Optional[str] = None, navidrome_playlist_id: Optional[str] = None, playlist_length: Optional[int] = None, library_ids: Optional[List[str]] = None) -> Optional[Playlist]:
         """Create a new playlist in the database"""
         await self.init_db()
         
@@ -166,16 +166,16 @@ class DatabaseManager:
 
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute("""
-                INSERT INTO playlists (artist_id, playlist_name, songs, reasoning, navidrome_playlist_id, playlist_length, library_ids)
+                INSERT INTO playlists (artist_id, playlist_name, songs, description, navidrome_playlist_id, playlist_length, library_ids)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (artist_id, playlist_name, songs_json, reasoning, navidrome_playlist_id, playlist_length, library_ids_json))
+            """, (artist_id, playlist_name, songs_json, description, navidrome_playlist_id, playlist_length, library_ids_json))
             
             playlist_id = cursor.lastrowid
             await db.commit()
             
             # Fetch the created playlist
             async with db.execute("""
-                SELECT id, artist_id, playlist_name, songs, reasoning, navidrome_playlist_id, created_at, updated_at, playlist_length, library_ids
+                SELECT id, artist_id, playlist_name, songs, description, navidrome_playlist_id, created_at, updated_at, playlist_length, library_ids
                 FROM playlists WHERE id = ?
             """, (playlist_id,)) as cursor:
                 row = await cursor.fetchone()
@@ -186,7 +186,7 @@ class DatabaseManager:
                         artist_id=row[1],
                         playlist_name=row[2],
                         songs=json.loads(row[3]),
-                        reasoning=row[4],
+                        description=row[4],
                         navidrome_playlist_id=row[5],
                         playlist_length=row[8],
                         created_at=row[6],
@@ -201,7 +201,7 @@ class DatabaseManager:
         
         async with aiosqlite.connect(self.db_path) as db:
             async with db.execute("""
-                SELECT id, artist_id, playlist_name, songs, reasoning, navidrome_playlist_id, created_at, updated_at, playlist_length, library_ids
+                SELECT id, artist_id, playlist_name, songs, description, navidrome_playlist_id, created_at, updated_at, playlist_length, library_ids
                 FROM playlists WHERE id = ?
             """, (playlist_id,)) as cursor:
                 row = await cursor.fetchone()
@@ -212,7 +212,7 @@ class DatabaseManager:
                         artist_id=row[1],
                         playlist_name=row[2],
                         songs=json.loads(row[3]),
-                        reasoning=row[4],
+                        description=row[4],
                         navidrome_playlist_id=row[5],
                         created_at=row[6],
                         updated_at=row[7],
@@ -258,7 +258,7 @@ class DatabaseManager:
                     p.artist_id, 
                     p.playlist_name, 
                     p.songs, 
-                    p.reasoning,
+                    p.description,
                     p.navidrome_playlist_id,
                     p.created_at, 
                     p.updated_at,
@@ -279,7 +279,7 @@ class DatabaseManager:
                         "artist_id": row[1],
                         "playlist_name": row[2],
                         "songs": json.loads(row[3]),
-                        "reasoning": row[4],
+                        "description": row[4],
                         "navidrome_playlist_id": row[5],
                         "created_at": row[6],
                         "updated_at": row[7],
@@ -304,7 +304,7 @@ class DatabaseManager:
                     p.artist_id, 
                     p.playlist_name, 
                     p.songs, 
-                    p.reasoning,
+                    p.description,
                     p.created_at, 
                     p.updated_at,
                     p.navidrome_playlist_id,
@@ -323,7 +323,7 @@ class DatabaseManager:
                         "artist_id": row[1],
                         "playlist_name": row[2],
                         "songs": json.loads(row[3]),
-                        "reasoning": row[4],
+                        "description": row[4],
                         "created_at": row[5],
                         "updated_at": row[6],
                         "navidrome_playlist_id": row[7],
@@ -474,8 +474,8 @@ class DatabaseManager:
             await db.commit()
             return cursor.rowcount > 0
     
-    async def update_playlist_content(self, navidrome_playlist_id: str, songs: List[str], reasoning: Optional[str] = None) -> bool:
-        """Update the songs and reasoning for a playlist during refresh"""
+    async def update_playlist_content(self, navidrome_playlist_id: str, songs: List[str], description: Optional[str] = None) -> bool:
+        """Update the songs and description for a playlist during refresh"""
         await self.init_db()
         
         songs_json = json.dumps(songs)
@@ -483,9 +483,9 @@ class DatabaseManager:
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute("""
                 UPDATE playlists 
-                SET songs = ?, reasoning = ?, last_refreshed = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                SET songs = ?, description = ?, last_refreshed = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
                 WHERE navidrome_playlist_id = ?
-            """, (songs_json, reasoning, navidrome_playlist_id))
+            """, (songs_json, description, navidrome_playlist_id))
             
             await db.commit()
             return cursor.rowcount > 0

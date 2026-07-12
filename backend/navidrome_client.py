@@ -341,10 +341,14 @@ class NavidromeClient:
                             "artist": artist_name,  # Include artist name for AI processing
                             "album": album_name,
                             "year": album_year,
-                            "play_count": song.get("playCount", 0)
+                            "play_count": song.get("playCount", 0),
+                            "starred": song.get("starred") is not None,
+                            "rating": song.get("userRating", 0),
+                            "format": song.get("suffix"),
+                            "bit_rate": song.get("bitRate", 0)
                         })
             
-            return tracks_list
+            return self._deduplicate_tracks(tracks_list)
                 
         except httpx.RequestError as e:
             raise Exception(f"Network error connecting to Navidrome: {e}")
@@ -427,7 +431,10 @@ class NavidromeClient:
                             "year": song.get("year"),
                             "genre": song.get("genre"),
                             "play_count": song.get("playCount", 0),
-                            "local_library_likes": song.get("starred") is not None,
+                            "starred": song.get("starred") is not None,
+                            "rating": song.get("userRating", 0),
+                            "format": song.get("suffix"),
+                            "bit_rate": song.get("bitRate", 0),
                             "duration": song.get("duration"),
                             "track_number": song.get("track")
                         }
@@ -448,8 +455,9 @@ class NavidromeClient:
                         print(f"⚠️ Reached safety limit of 50k tracks for genre '{genre}'")
                         break
 
-            print(f"✅ Completed multi-genre collection: {len(all_tracks)} tracks for {len(genres)} genres")
-            return all_tracks
+            deduped = self._deduplicate_tracks(all_tracks)
+            print(f"✅ Completed multi-genre collection: {len(deduped)} tracks for {len(genres)} genres")
+            return deduped
 
         except httpx.RequestError as e:
             raise Exception(f"Network error connecting to Navidrome: {e}")
@@ -528,7 +536,10 @@ class NavidromeClient:
                         "year": song.get("year"),
                         "genre": song.get("genre"),
                         "play_count": song.get("playCount", 0),
-                        "local_library_likes": song.get("starred") is not None,
+                        "starred": song.get("starred") is not None,
+                        "rating": song.get("userRating", 0),
+                        "format": song.get("suffix"),
+                        "bit_rate": song.get("bitRate", 0),
                         "duration": song.get("duration"),
                         "track_number": song.get("track")
                     }
@@ -549,8 +560,9 @@ class NavidromeClient:
                     print(f"⚠️ Reached safety limit of 50k tracks for genre '{genre}'")
                     break
 
-            print(f"✅ Completed genre collection: {len(all_tracks)} tracks for '{genre}'")
-            return all_tracks
+            deduped = self._deduplicate_tracks(all_tracks)
+            print(f"✅ Completed genre collection: {len(deduped)} tracks for '{genre}'")
+            return deduped
 
         except httpx.RequestError as e:
             raise Exception(f"Network error connecting to Navidrome: {e}")
@@ -608,14 +620,18 @@ class NavidromeClient:
                         "year": song.get("year"),
                         "genre": song.get("genre"),
                         "play_count": song.get("playCount", 0),
-                        "local_library_likes": song.get("starred") is not None,
+                        "starred": song.get("starred") is not None,
+                        "rating": song.get("userRating", 0),
+                        "format": song.get("suffix"),
+                        "bit_rate": song.get("bitRate", 0),
                         "duration": song.get("duration"),
                         "track_number": song.get("track")
                     }
                     tracks_list.append(track)
 
-            print(f"✅ Fallback method found {len(tracks_list)} tracks for '{genre}'")
-            return tracks_list
+            deduped = self._deduplicate_tracks(tracks_list)
+            print(f"✅ Fallback method found {len(deduped)} tracks for '{genre}'")
+            return deduped
 
         except Exception as e:
             print(f"❌ Fallback method also failed: {e}")
@@ -780,6 +796,99 @@ class NavidromeClient:
         except Exception as e:
             raise Exception(f"Unexpected error fetching genres: {e}")
 
+    @staticmethod
+    def _get_quality_score(track: Dict[str, Any]) -> int:
+        """Return a numeric quality score for a track based on format and bitrate.
+
+        Higher is better. Used to prefer lossless/high-bitrate duplicates.
+        """
+        fmt = (track.get("format") or track.get("suffix") or "").lower()
+        bit_rate = track.get("bit_rate") or 0
+
+        # Lossless formats beat everything
+        if fmt in ("flac", "flac24", "alac", "wav", "aiff", "aif", "dsf", "dff", "ape", "wv"):
+            return 10000 + bit_rate
+
+        # Lossy: use bitrate as score with small format bonuses
+        if fmt in ("opus",):
+            return 500 + bit_rate
+        if fmt in ("ogg", "vorbis"):
+            return 400 + bit_rate
+        if fmt in ("aac", "m4a", "mp4"):
+            return 300 + bit_rate
+        if fmt in ("mp3",):
+            return 200 + bit_rate
+        if fmt in ("wma",):
+            return 150 + bit_rate
+
+        # Unknown format – fall back to bitrate only
+        return bit_rate
+
+    @staticmethod
+    def _deduplicate_tracks(tracks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Deduplicate a list of tracks by track ID.
+
+        When multiple entries share the same ID the one with the highest
+        engagement / quality is kept, evaluated in this order:
+          1. starred (True beats False)
+          2. play_count (higher beats lower)
+          3. rating (higher beats lower)
+          4. audio quality score (FLAC > high-bitrate MP3 > low-bitrate MP3 …)
+
+        The original insertion order of first-seen IDs is preserved.
+        """
+        seen: Dict[str, Dict[str, Any]] = {}
+
+        for track in tracks:
+            tid = track.get("id")
+            if tid is None:
+                continue
+
+            if tid not in seen:
+                seen[tid] = track
+                continue
+
+            existing = seen[tid]
+
+            # Priority 1: starred
+            new_loved = bool(track.get("starred"))
+            old_loved = bool(existing.get("starred"))
+            if new_loved and not old_loved:
+                seen[tid] = track
+                continue
+            if old_loved and not new_loved:
+                continue
+
+            # Priority 2: play_count
+            new_plays = track.get("play_count") or 0
+            old_plays = existing.get("play_count") or 0
+            if new_plays > old_plays:
+                seen[tid] = track
+                continue
+            if old_plays > new_plays:
+                continue
+
+            # Priority 3: rating
+            new_rating = track.get("rating") or 0
+            old_rating = existing.get("rating") or 0
+            if new_rating > old_rating:
+                seen[tid] = track
+                continue
+            if old_rating > new_rating:
+                continue
+
+            # Priority 4: audio quality
+            if NavidromeClient._get_quality_score(track) > NavidromeClient._get_quality_score(existing):
+                seen[tid] = track
+
+        result = list(seen.values())
+
+        duplicates_removed = len(tracks) - len(result)
+        if duplicates_removed > 0:
+            print(f"🔍 Deduplication: removed {duplicates_removed} duplicate track(s) from {len(tracks)} → {len(result)} unique tracks")
+
+        return result
+
     def _parse_genre_string(self, genre_str: str) -> List[str]:
         """Parse genre strings that may contain multiple genres separated by delimiters"""
         if not genre_str:
@@ -851,13 +960,17 @@ class NavidromeClient:
                     "duration": song.get("duration"),
                     "play_count": song.get("playCount", 0),
                     "played": song.get("played"),
-                    "starred": song.get("starred"),
+                    "starred": song.get("starred") is not None,
+                    "rating": song.get("userRating", 0),
+                    "format": song.get("suffix"),
+                    "bit_rate": song.get("bitRate", 0),
                     "genres": song.get("genres", []),
                     "path": song.get("path")
                 })
 
-            print(f"⭐ Retrieved {len(tracks)} starred tracks")
-            return tracks
+            deduped = self._deduplicate_tracks(tracks)
+            print(f"⭐ Retrieved {len(deduped)} starred tracks")
+            return deduped
 
         except httpx.RequestError as e:
             raise Exception(f"Network error connecting to Navidrome: {e}")

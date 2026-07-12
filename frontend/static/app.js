@@ -1111,7 +1111,7 @@ function renderPlaylists(playlists) {
                             ${playlist.last_refreshed ? `Refreshed ${formatFriendlyDate(playlist.last_refreshed)}` : 'Not refreshed yet'}
                         </p>
                     </div>
-                    ${playlist.reasoning ? `<p class="text-sm text-gray-600 m-0 mt-2 italic">${truncateText(playlist.reasoning, 140)}</p>` : ''}
+                    ${playlist.description ? `<p class="text-sm text-gray-600 m-0 mt-2 italic">${truncateText(playlist.description, 140)}</p>` : ''}
                 </div>
                 <div class="flex-none">
                     <button

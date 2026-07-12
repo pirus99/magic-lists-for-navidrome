@@ -31,7 +31,7 @@ class Playlist(BaseModel):
     artist_id: str
     playlist_name: str
     songs: List[str] = []
-    reasoning: Optional[str] = None
+    description: Optional[str] = None
     navidrome_playlist_id: Optional[str] = None
     library_ids: List[str] = []
     playlist_length: Optional[int] = None
@@ -74,7 +74,7 @@ class RediscoverWeeklyV2Response(BaseModel):
     tracks: List[Dict[str, Any]]
     theme: str
     mode: str
-    reasoning: str
+    description: str
     user_id: str
     server_id: str
     generated_at: str

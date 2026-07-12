@@ -113,7 +113,7 @@ class RecipeManager:
             # Return unchanged for other types (int, float, bool, None)
             return obj
     
-    def apply_recipe(self, playlist_type: str, inputs: Dict[str, Any], include_reasoning: bool = False) -> Dict[str, Any]:
+    def apply_recipe(self, playlist_type: str, inputs: Dict[str, Any], include_description: bool = False) -> Dict[str, Any]:
         """Apply a recipe with given inputs and return the fully substituted recipe"""
         recipe = self.get_recipe(playlist_type)
         
@@ -137,7 +137,7 @@ class RecipeManager:
             print(f"🔄 Processing recipe with {len(replacements)} placeholder replacements")
             
             # Map re-discover specific inputs
-            if "candidate_tracks_json" in inputs:
+            if "candidate_tracks" in inputs:
                 replacements["{{CANDIDATE_TRACKS_JSON}}"] = str(inputs["candidate_tracks_json"])
             if "analysis_summary" in inputs:
                 replacements["{{ANALYSIS_SUMMARY}}"] = str(inputs["analysis_summary"])
@@ -178,8 +178,8 @@ class RecipeManager:
                 raise Exception(f"Missing required inputs for {playlist_type}: {missing_inputs}")
             
             # Select the appropriate prompt template
-            if include_reasoning and "prompt_template_with_reasoning" in recipe:
-                prompt_template = recipe["prompt_template_with_reasoning"]
+            if include_description and "prompt_template_with_description" in recipe:
+                prompt_template = recipe["prompt_template_with_description"]
             else:
                 prompt_template = recipe["prompt_template"]
             
