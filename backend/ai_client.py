@@ -756,50 +756,12 @@ class AIClient:
             List of track IDs in curated order, or tuple of (track_ids, description) if include_description=True
         """
 
-        if not self.api_key and self.provider.provider_type == "openrouter":
+        if not self.api_key and not self.provider.provider_type == "ollama":
             genre_names = ", ".join(genres)
             print(f"❌ No AI API key configured, using fallback curation for {genre_names}")
-            # Fallback: return first num_tracks by play count
-            sorted_tracks = sorted(
-                candidate_tracks,
-                key=lambda x: x.get("play_count", 0),
-                reverse=True
-            )
-            track_ids = [track["id"] for track in sorted_tracks[:num_tracks]]
-
-            if include_description:
-                fallback_description = f"Fallback curation: Selected {len(track_ids)} tracks sorted by play count (highest first). No AI API key configured."
-                return track_ids, fallback_description
-            else:
-                return track_ids
-
+            fallback_mix = self.fallback_genre_mix_selection(candidate_tracks, num_tracks, include_description, f"No AI API key configured for {genre_names}")
+            return fallback_mix
         try:
-            # Using AI to curate playlist (logging moved to scheduler_logger)
-
-            # SHUFFLE tracks to prevent AI from album-grouping based on input order
-            import random
-            shuffled_tracks = candidate_tracks.copy()  # Don't modify the original list
-            random.shuffle(shuffled_tracks)
-
-            # Note: We now pass shuffled_tracks directly as clean JSON array to the AI
-            # No more string conversion and text blob parsing!
-
-            # Log track data completeness
-            original_track_count = len(candidate_tracks)
-            shuffled_track_count = len(shuffled_tracks)
-
-            print(f"🎵 Preparing {shuffled_track_count} tracks for AI curation")
-
-            # Verify track data includes essential fields
-            if shuffled_tracks:
-                sample_track = shuffled_tracks[0]
-                essential_fields = ['id', 'title', 'artist', 'album']
-                missing_fields = [field for field in essential_fields if field not in sample_track]
-                if missing_fields:
-                    print(f"⚠️  Missing essential fields in tracks: {missing_fields}")
-            else:
-                print(f"❌ ERROR: No tracks available for curation!")
-
             # Use recipe system to generate prompt and get LLM parameters
             genre_names = ", ".join(genres)
             recipe_inputs = {
@@ -841,14 +803,18 @@ class AIClient:
             for index, track in enumerate(candidate_tracks):
                 # Store the actual track ID in our mapping
                 track_id_map.append(track["id"])
+                track_score = round(track.get("play_count", 0) )* 1.5
+                liked = track.get("local_library_likes", False)
+
+                if liked:
+                    track_score += 15  # Boost score for liked tracks
 
                 # Create indexed track (minimal essential data to reduce token usage)
                 indexed_track = (
                     index,
-                    f"{track.get('title', 'Unknown')} - {track.get('artist', 'Unknown')} - {track.get('album', 'Unknown')}",
+                    f"{track.get('title', 'Unknown')} - {track.get('artist', 'Unknown')}",
                     track.get('year', 'Unknown'),
-                    track.get('play_count', 0),
-                    bool(track.get('local_library_likes', False))
+                    track_score
                     )
                 indexed_tracks.append(indexed_track)
 
@@ -857,7 +823,7 @@ class AIClient:
             user_content = (
                 f"Select {num_tracks} tracks for a {genre_names} playlist.\n"
                 f"The data below is a list of tracks, each represented as a tuple:\n"
-                f'(index, "title - artist – album", year, play_count, liked)\n'
+                f'(index, "title - artist", year, score)\n'
                 f"Tracks: {indexed_tracks}\n"
             )
 
