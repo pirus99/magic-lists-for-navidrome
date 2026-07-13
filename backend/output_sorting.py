@@ -181,6 +181,7 @@ def space_id_track_list_by_artist_and_album(track_ids: list[int], candidate_trac
         spaced_playlist = ensure_album_spacing(spaced_playlist, spacing=album_spacing)
         reversed_spaced_playlist = ensure_artist_spacing(spaced_playlist[::-1], spacing=artist_spacing)
         spaced_playlist = reversed_spaced_playlist[::-1]
+        spaced_playlist = ensure_album_spacing(spaced_playlist, spacing=album_spacing)
 
     for track in spaced_playlist:
         playlist.append(track["id"])

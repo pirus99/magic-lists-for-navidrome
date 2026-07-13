@@ -236,8 +236,14 @@ class AIProvider:
             if hasattr(self.client, 'is_closed') and not self.client.is_closed:
                 await self.client.aclose()
 
-def get_ai_provider() -> AIProvider:
-    """Factory function that reads .env and returns configured provider"""
+def get_ai_provider(for_description: bool = False) -> AIProvider:
+    """Factory function that reads .env and returns configured provider
+
+    Args:
+        for_description: When True, uses DESCRIPTION_AI_MODEL (falling back to
+            AI_MODEL) for the model name. Provider type and API key are always
+            shared with the main AI configuration.
+    """
     provider_type = os.getenv("AI_PROVIDER", "openrouter")
     
     # Validate provider type
@@ -253,7 +259,11 @@ def get_ai_provider() -> AIProvider:
         raise ValueError(f"{provider_type} requires AI_API_KEY. Get one at: {provider_config.signup_url}")
     
     # Get model (user override or provider default)
-    model = os.getenv("AI_MODEL") or provider_config.default_model
+    if for_description:
+        # Description model: DESCRIPTION_AI_MODEL, falling back to AI_MODEL, then provider default
+        model = os.getenv("DESCRIPTION_AI_MODEL") or os.getenv("AI_MODEL") or provider_config.default_model
+    else:
+        model = os.getenv("AI_MODEL") or provider_config.default_model
     
     # Get base URL (allow Ollama override, use default for others)
     if provider_type == "ollama":

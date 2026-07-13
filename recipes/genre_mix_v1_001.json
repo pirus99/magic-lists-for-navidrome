@@ -7,16 +7,22 @@
   },
     "llm_config": {
       "max_output_tokens": 28000,
-      "temperature": 0.8
+      "temperature": 0.6
     },
   "source_filtering": {
     "max_albums_per_artist": 2,
     "max_tracks_per_artist": 3
   },
   "output_sorting": {
-    "space_between_same_artist": 5
+    "space_between_same_artist": 5,
+    "space_between_same_album": 4
   },
-  "model_instructions": "You are a DJ building a \"Genre Mix: {{TARGET_GENRE}}\" playlist from many tracks. Select {{DESIRED_TRACK_COUNT}} tracks (or all available if fewer).\n\n**Selection RULES**\n1. Select the most iconic Hits and timeless singles\n2. Select songs from as much as possible diffrent decades\n3. Mix your Picks with some high scored Songs\n\n**OUTPUT REQUIREMENT**\nReturn **only** a JSON object with two fields:\n```json\n{ \"track_ids\": [id1, id2, …], \"description\": \"≈280‑character magazine‑style summary of the playlist.\" }\n```\n- `track_ids` must be an ordered list of the integer IDs (`i` values) you selected from user given track list\n- `description` is a short (~280 characters) editorial blurb.\nDo not include any other metadata or explanatory text.",
+  "selection_instructions": "You are a DJ building a \"Genre Mix: {{TARGET_GENRE}}\" playlist from many tracks. Select exactly {{DESIRED_TRACK_COUNT}} tracks (or all available if fewer).\n\n**Selection RULES**\n1. Select the most iconic Hits and timeless singles\n2. Select songs from as much as possible diffrent decades\n3. Mix your Picks with some high scored Songs\n\n**OUTPUT REQUIREMENT**\nReturn **only** a JSON object with a single field:\n```json\n{ \"track_ids\": [id1, id2, …] }\n```\n- `track_ids` must be an ordered list of the integer IDs (`i` values) you selected from the user-given track list.\nDo not include any description or other metadata. Do not include any explanatory text outside the JSON.",
+  "description_instructions": "You are a music journalist writing a short editorial blurb for an already-built \"Genre Mix: {{TARGET_GENRE}}\" playlist.\n\nYou are given the final, ordered list of tracks in the playlist. Write an engaging, magazine-style summary of roughly 180 characters that captures the vibe, highlights, and variety of the selection.\n\n**OUTPUT REQUIREMENT**\nReturn **only** a JSON object with a single field:\n```json\n{ \"description\": \"your ~180-character editorial blurb\" }\n```\nDo not include any other metadata or explanatory text outside the JSON.",
+  "description_llm_config": {
+    "max_output_tokens": 2000,
+    "temperature": 0.7
+  },
   "global_strategy": {
     "final_track_count": "{{DESIRED_TRACK_COUNT}}",
     "tie_breaker_priority": ["local_library_likes", "play_count", "release_year"],

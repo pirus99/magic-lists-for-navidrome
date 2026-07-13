@@ -44,6 +44,9 @@ class AIClient:
     
     def __init__(self):
         self.provider = get_ai_provider()
+        # Separate provider instance for playlist descriptions (same provider/key,
+        # but can use a different model via DESCRIPTION_AI_MODEL in .env)
+        self.description_provider = get_ai_provider(for_description=True)
         # Backward compatibility - keep these for fallback logic
         self.api_key = self.provider.api_key
         self.model = self.provider.model
@@ -52,6 +55,7 @@ class AIClient:
         # Debug logging
         print(f"🔍 AIClient initialized with provider: {self.provider.provider_type}")
         print(f"🤖 Using model: {self.model}")
+        print(f"📝 Description model: {self.description_provider.model}")
         print(f"🌐 Base URL: {self.base_url}")
         
         
@@ -775,16 +779,18 @@ class AIClient:
             final_recipe = recipe_manager.apply_recipe("genre_mix", recipe_inputs, include_description)
 
             # Initialize variables
-            model_instructions = ""
             user_content = ""
-            prompt = ""
             track_id_map = []
 
             # New recipe format (genre_mix recipe has llm_config)
             llm_config = final_recipe.get("llm_config", {})
-            model_instructions = final_recipe.get("model_instructions", "")
+            # Use the dedicated selection prompt; fall back to the legacy combined prompt
+            selection_instructions = final_recipe.get("selection_instructions") or final_recipe.get("model_instructions", "")
+            description_instructions = final_recipe.get("description_instructions", "")
+            description_llm_config = final_recipe.get("description_llm_config", {"temperature": 0.7, "max_output_tokens": 500})
             output_sorting_params = final_recipe.get("output_sorting", {})
-            artist_spacing = output_sorting_params.get("artist_spacing", 4)
+            artist_spacing = output_sorting_params.get("space_between_same_artist", 4)
+            album_spacing = output_sorting_params.get("space_between_same_album", 3)
 
             # Use model from environment (.env file), ignoring recipe model_name
             model = self.model or "openai/gpt-3.5-turbo"
@@ -827,9 +833,9 @@ class AIClient:
                 f"Tracks: {indexed_tracks}\n"
             )
 
-            # Use the provider to make the AI request
+            # Use the provider to make the AI request (selection step only)
             content = await self.provider.generate(
-                system_prompt=model_instructions,
+                system_prompt=selection_instructions,
                 user_prompt=user_content,
                 max_tokens=max_tokens,
                 temperature=temperature
@@ -905,18 +911,13 @@ class AIClient:
                 source_track_count = len(candidate_tracks)
 
                 if isinstance(response_data, dict) and "track_ids" in response_data:
-                    # New format with description - validate structure
+                    # Selection step: only track_ids expected (description generated separately)
                     track_ids = response_data.get("track_ids", [])
-                    description = response_data.get("description", "")
 
                     # Structure checks
                     if not isinstance(track_ids, list):
                         print(f"❌ Response validation failed: track_ids is not a list")
                         raise ValueError("Response structure invalid: track_ids must be a list")
-
-                    if not isinstance(description, str):
-                        print(f"❌ Response validation failed: description is not a string")
-                        raise ValueError("Response structure invalid: description must be a string")
 
                     # INDEX-BASED: Validate all track IDs are integers (indices)
                     if not all(isinstance(tid, int) for tid in track_ids):
@@ -955,7 +956,19 @@ class AIClient:
                     mapped_track_ids = [track_id_map[idx] for idx in valid_indices]
                     # Mapped indices to track IDs
 
-                    final_selection = space_id_track_list_by_artist_and_album(mapped_track_ids, candidate_tracks, artist_spacing=artist_spacing, album_spacing=0)
+                    final_selection = space_id_track_list_by_artist_and_album(mapped_track_ids, candidate_tracks, artist_spacing=artist_spacing, album_spacing=album_spacing)
+
+                    # Generate the description in a separate AI request (if requested)
+                    description = ""
+                    if include_description:
+                        description_track_count = num_tracks / 5
+                        description = await self._generate_genre_description(
+                            description_instructions=description_instructions,
+                            selected_track_ids=final_selection[:int(description_track_count)],
+                            candidate_tracks=candidate_tracks,
+                            genre_names=genre_names,
+                            llm_config=description_llm_config
+                        )
 
                     if include_description:
                         return final_selection, description
@@ -970,8 +983,19 @@ class AIClient:
 
                     # AI curation successful for Genre Mix (logging moved to scheduler_logger)
 
+                    # Generate the description in a separate AI request (if requested)
+                    description = ""
                     if include_description:
-                        return final_selection, ""  # No description available
+                        description = await self._generate_genre_description(
+                            description_instructions=description_instructions,
+                            selected_track_ids=final_selection,
+                            candidate_tracks=candidate_tracks,
+                            genre_names=genre_names,
+                            llm_config=description_llm_config
+                        )
+
+                    if include_description:
+                        return final_selection, description
                     else:
                         return final_selection
                 else:
@@ -1028,13 +1052,111 @@ class AIClient:
         )
         track_ids = [track["id"] for track in sorted_tracks[:num_tracks]]
         
-        spaced_tracks = space_id_track_list_by_artist_and_album(track_ids, candidate_tracks, artist_spacing=4, album_spacing=6)
+        spaced_tracks = space_id_track_list_by_artist_and_album(track_ids, candidate_tracks, artist_spacing=4, album_spacing=3)
 
         if include_description:
             description = f"Fallback curation: Selected top {len(track_ids)} tracks sorted by play count (highest first). {error_reason}"
             return spaced_tracks, description
         else:
             return spaced_tracks
+
+    async def _generate_genre_description(
+        self,
+        description_instructions: str,
+        selected_track_ids: List[str],
+        candidate_tracks: List[Dict[str, Any]],
+        genre_names: str,
+        llm_config: Dict[str, Any]
+    ) -> str:
+        """Generate an editorial description for an already-built Genre Mix playlist.
+
+        Uses a separate AI request (and optionally a separate model via DESCRIPTION_AI_MODEL).
+        On any failure, returns a generic fallback description string so the playlist
+        can still be created.
+
+        Args:
+            description_instructions: System prompt for the description model
+            selected_track_ids: Final ordered list of track IDs in the playlist
+            candidate_tracks: Full candidate track metadata (for human-readable mapping)
+            genre_names: Comma-separated genre names for context
+            llm_config: LLM parameters (temperature, max_output_tokens) for the description call
+
+        Returns:
+            Description string (fallback text on failure)
+        """
+        fallback_description = f"A curated Genre Mix playlist blending the best of {genre_names}."
+
+        if not description_instructions:
+            print(f"⚠️ No description_instructions configured, using fallback description")
+            return fallback_description
+
+        # Build a human-readable, ordered list of the selected tracks
+        track_id_to_info = {track["id"]: track for track in candidate_tracks}
+        readable_lines = []
+        for position, track_id in enumerate(selected_track_ids, start=1):
+            track = track_id_to_info.get(track_id)
+            if track:
+                title = track.get("title", "Unknown")
+                artist = track.get("artist", "Unknown")
+                year = track.get("year", "Unknown")
+                readable_lines.append(f"{position}. {title} - {artist} ({year})")
+            else:
+                readable_lines.append(f"{position}. [unknown track]")
+
+        readable_list = "\n".join(readable_lines)
+
+        user_content = (
+            f"The following is the final, ordered track list for a Genre Mix: {genre_names} playlist.\n"
+            f"Write a short editorial description for it.\n\n"
+            f"Tracks:\n{readable_list}\n"
+        )
+
+        temperature = llm_config.get("temperature", 0.7)
+        max_tokens = llm_config.get("max_output_tokens", 500)
+
+        try:
+            print(f"📝 Generating Genre Mix description with model: {self.description_provider.model}")
+            content = await self.description_provider.generate(
+                system_prompt=description_instructions,
+                user_prompt=user_content,
+                max_tokens=max_tokens,
+                temperature=temperature
+            )
+
+            if not content or content.strip() == "":
+                print(f"⚠️ Description AI returned empty response, using fallback description")
+                return fallback_description
+
+            # Parse: accept plain text, or extract "description" from a JSON wrapper
+            cleaned = content.strip()
+            if cleaned.startswith("```json"):
+                cleaned = cleaned[7:]
+            if cleaned.startswith("```"):
+                cleaned = cleaned[3:]
+            if cleaned.endswith("```"):
+                cleaned = cleaned[:-3]
+            cleaned = cleaned.strip()
+
+            try:
+                parsed = json.loads(clean_json_response(cleaned))
+                if isinstance(parsed, dict) and isinstance(parsed.get("description"), str):
+                    description = parsed["description"].strip()
+                else:
+                    description = cleaned
+            except (json.JSONDecodeError, ValueError):
+                # Plain text response - use as-is
+                description = cleaned
+
+            if not description:
+                print(f"⚠️ Description AI returned empty content, using fallback description")
+                return fallback_description
+
+            print(f"✅ Genre Mix description generated (length: {len(description)} chars)")
+            return description
+
+        except Exception as e:
+            print(f"💥 Error generating Genre Mix description: {e}")
+            return fallback_description
 
     async def close(self):
         """Close the HTTP client"""
@@ -1043,3 +1165,8 @@ class AIClient:
                 await self.provider.close()
         except Exception as e:
             print(f"Warning: Error closing AI provider: {e}")
+        try:
+            if hasattr(self, 'description_provider') and self.description_provider:
+                await self.description_provider.close()
+        except Exception as e:
+            print(f"Warning: Error closing description AI provider: {e}")
