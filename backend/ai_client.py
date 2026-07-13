@@ -6,6 +6,7 @@ import re
 from typing import List, Dict, Any, Union, Tuple, Optional
 from .recipe_manager import recipe_manager
 from .services.ai_providers import get_ai_provider
+from .output_sorting import space_id_track_list_by_artist_and_album
 
 
 def clean_json_response(response: str) -> str:
@@ -737,7 +738,7 @@ class AIClient:
     async def curate_genre_mix(
         self,
         genres: List[str],
-        candidate_tracks: List[Tuple[int,str,Union[int, str],int,bool]],
+        candidate_tracks: List[Dict[str, Any]],
         num_tracks: int = 20,
         include_description: bool = False,
         variety_context: Optional[str] = None
@@ -746,7 +747,7 @@ class AIClient:
 
         Args:
             genres: List of genre names
-            candidate_tracks: List of track tuples with id, title, album, year, play_count
+            candidate_tracks: List of track dictionaries with id, title, album, year, play_count
             num_tracks: Number of tracks to select (default: 20)
             include_description: Whether to return AI's description along with track IDs
             variety_context: Additional context for variety (optional)
@@ -820,6 +821,8 @@ class AIClient:
             # New recipe format (genre_mix recipe has llm_config)
             llm_config = final_recipe.get("llm_config", {})
             model_instructions = final_recipe.get("model_instructions", "")
+            output_sorting_params = final_recipe.get("output_sorting", {})
+            artist_spacing = output_sorting_params.get("artist_spacing", 4)
 
             # Use model from environment (.env file), ignoring recipe model_name
             model = self.model or "openai/gpt-3.5-turbo"
@@ -835,7 +838,7 @@ class AIClient:
             # Create indexed tracks (remove complex IDs, use simple indices)
             indexed_tracks = []
 
-            for index, track in enumerate(shuffled_tracks):
+            for index, track in enumerate(candidate_tracks):
                 # Store the actual track ID in our mapping
                 track_id_map.append(track["id"])
 
@@ -986,16 +989,7 @@ class AIClient:
                     mapped_track_ids = [track_id_map[idx] for idx in valid_indices]
                     # Mapped indices to track IDs
 
-                    # Final selection (limit to requested count)
-                    final_selection = mapped_track_ids[:num_tracks]
-
-                    # AI curation successful for Genre Mix (logging moved to scheduler_logger)
-                    if description:
-                        # AI description available (logged in main.py scheduler_logger)
-                        pass
-
-                    # Final selection (limit to requested count)
-                    final_selection = mapped_track_ids[:num_tracks]
+                    final_selection = space_id_track_list_by_artist_and_album(mapped_track_ids, candidate_tracks, artist_spacing=artist_spacing, album_spacing=0)
 
                     if include_description:
                         return final_selection, description
@@ -1058,7 +1052,7 @@ class AIClient:
             print(f"📋 Traceback: {traceback.format_exc()}")
             return self._fallback_genre_mix_selection(candidate_tracks, num_tracks, include_description, f"Unexpected error: {e}")
 
-    def _fallback_genre_mix_selection(self, candidate_tracks: List[Tuple[int,str,Union[int, str],int,bool]], num_tracks: int, include_description: bool = False, error_reason: str = "AI service was unavailable") -> Union[List[str], Tuple[List[str], str]]:
+    def _fallback_genre_mix_selection(self, candidate_tracks: list[dict], num_tracks: int, include_description: bool = False, error_reason: str = "AI service was unavailable") -> Union[list[str]]:
         """Fallback selection algorithm for genre mix when AI is unavailable"""
         # Sort by play count (highest first)
         sorted_tracks = sorted(
@@ -1067,12 +1061,14 @@ class AIClient:
             reverse=True
         )
         track_ids = [track["id"] for track in sorted_tracks[:num_tracks]]
+        
+        spaced_tracks = space_id_track_list_by_artist_and_album(track_ids, candidate_tracks, artist_spacing=4, album_spacing=6)
 
         if include_description:
             description = f"Fallback curation: Selected top {len(track_ids)} tracks sorted by play count (highest first). {error_reason}"
-            return track_ids, description
+            return spaced_tracks, description
         else:
-            return track_ids
+            return spaced_tracks
 
     async def close(self):
         """Close the HTTP client"""

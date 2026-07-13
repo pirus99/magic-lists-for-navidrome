@@ -273,6 +273,65 @@ class NavidromeClient:
         except Exception as e:
             print(f"💥 Error fetching music folders: {e}")
             raise Exception(f"Failed to fetch music folders: {e}")
+        
+    async def get_track_by_id(self, track_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch a single track by its ID using Subsonic API
+
+        Args:
+            track_id: The track ID
+
+        Returns:
+            Track object with format: {id, title, artist, album, year, play_count}
+        """
+        try:
+            await self._ensure_authenticated()
+
+            params = self._get_subsonic_params()
+            params["id"] = track_id
+
+            response = await self.client.get(
+                f"{self.base_url}/rest/getSong.view",
+                params=params
+            )
+            response.raise_for_status()
+
+            data = await response.json()
+
+            # Handle Subsonic API response format
+            subsonic_response = data.get("subsonic-response", {})
+            if subsonic_response.get("status") != "ok":
+                error = subsonic_response.get("error", {})
+                raise Exception(f"Subsonic API error: {error.get('message', 'Unknown error')}")
+
+            song_data = subsonic_response.get("song", {})
+            if not song_data:
+                print(f"⚠️ No song found for ID: {track_id}")
+                return None
+
+            track = {
+                "id": song_data.get("id"),
+                "title": song_data.get("title"),
+                "artist": song_data.get("artist"),
+                "album": song_data.get("album"),
+                "year": song_data.get("year"),
+                "play_count": song_data.get("playCount", 0),
+                "starred": song_data.get("starred") is not None,
+                "rating": song_data.get("userRating", 0),
+                "format": song_data.get("suffix"),
+                "bit_rate": song_data.get("bitRate", 0),
+                "duration": song_data.get("duration"),
+                "track_number": song_data.get("track")
+            }
+
+            print(f"✅ Fetched track: {track['title']} by {track['artist']}")
+            return track
+
+        except httpx.RequestError as e:
+            raise Exception(f"Network error connecting to Navidrome: {e}")
+        except httpx.HTTPStatusError as e:
+            raise Exception(f"HTTP error from Navidrome: {e.response.status_code}")
+        except Exception as e:
+            raise Exception(f"Unexpected error fetching track by ID {track_id}: {e}")
 
     async def get_tracks_by_artist(self, artist_id: str, library_ids: Union[List[str], None] = None) -> List[Dict[str, Any]]:
         """Fetch tracks for a specific artist using Subsonic API
