@@ -129,7 +129,7 @@ def score_tracks_by_user_engagement(tracks: List[Dict], library_stats: Dict) -> 
     return scored_tracks
 
 
-def calculate_filter_threshold(target_playlist_size: int) -> int:
+def calculate_filter_threshold(target_playlist_size: int, ollama_max_tracks: Optional[int] = None) -> int:
     """
     Calculate optimal multiplier for filtering source tracks.
     
@@ -138,10 +138,17 @@ def calculate_filter_threshold(target_playlist_size: int) -> int:
     
     Args:
         target_playlist_size: Desired number of tracks in final playlist
+        ollama_max_tracks: Optional absolute maximum track count for Ollama provider.
+            When provided, this value is returned directly instead of calculating
+            the dynamic threshold.
         
     Returns:
         int: Multiplier for filtering (e.g., 10 means keep 10x target size)
     """
+    # If Ollama max tracks is set, use it as absolute threshold
+    if ollama_max_tracks is not None:
+        return ollama_max_tracks
+    
     if target_playlist_size <= 25:
         return 10  # 25 tracks -> keep top 250
     elif target_playlist_size <= 50:
@@ -154,19 +161,20 @@ def calculate_filter_threshold(target_playlist_size: int) -> int:
         return max(5, int(600 / target_playlist_size * 6))
 
 
-def should_apply_smart_filtering(source_tracks: List[Dict], target_playlist_size: int) -> bool:
+def should_apply_smart_filtering(source_tracks: List[Dict], target_playlist_size: int, ollama_max_tracks: Optional[int] = None) -> bool:
     """
     Determine if smart filtering should be applied based on track count and target size.
     
     Args:
         source_tracks: List of all available tracks for the artist
         target_playlist_size: Desired number of tracks in final playlist
+        ollama_max_tracks: Optional absolute maximum track count for Ollama provider
         
     Returns:
         bool: True if filtering should be applied
     """
-    threshold_multiplier = calculate_filter_threshold(target_playlist_size)
-    threshold = target_playlist_size * threshold_multiplier
+    threshold_multiplier = calculate_filter_threshold(target_playlist_size, ollama_max_tracks)
+    threshold = ollama_max_tracks if ollama_max_tracks is not None else target_playlist_size * threshold_multiplier
     
     return len(source_tracks) > threshold
 
@@ -174,7 +182,8 @@ def should_apply_smart_filtering(source_tracks: List[Dict], target_playlist_size
 def filter_tracks_by_engagement(
     tracks: List[Dict], 
     target_playlist_size: int, 
-    library_stats: Dict
+    library_stats: Dict,
+    ollama_max_tracks: Optional[int] = None
 ) -> List[Dict]:
     """
     Apply smart filtering to tracks if needed, returning filtered subset.
@@ -183,17 +192,18 @@ def filter_tracks_by_engagement(
         tracks: List of all available tracks
         target_playlist_size: Desired number of tracks in final playlist
         library_stats: Library statistics for scoring
+        ollama_max_tracks: Optional absolute maximum track count for Ollama provider
         
     Returns:
         List[Dict]: Filtered tracks (or original if filtering not needed)
     """
     # Check if filtering is needed
-    if not should_apply_smart_filtering(tracks, target_playlist_size):
+    if not should_apply_smart_filtering(tracks, target_playlist_size, ollama_max_tracks):
         return tracks
     
     # Calculate how many tracks to keep
-    threshold_multiplier = calculate_filter_threshold(target_playlist_size)
-    max_tracks_to_keep = target_playlist_size * threshold_multiplier
+    threshold_multiplier = calculate_filter_threshold(target_playlist_size, ollama_max_tracks)
+    max_tracks_to_keep = ollama_max_tracks if ollama_max_tracks is not None else target_playlist_size * threshold_multiplier
     
     # Score and filter tracks
     scored_tracks = score_tracks_by_user_engagement(tracks, library_stats)
@@ -319,7 +329,8 @@ def filter_tracks_for_this_is_playlist(
     target_playlist_size: int, 
     library_stats: Dict,
     playlist_type: str = "artist",
-    diversity_config: Optional[Dict] = None
+    diversity_config: Optional[Dict] = None,
+    ollama_max_tracks: Optional[int] = None
 ) -> Tuple[List[Dict], Dict[str, Any]]:
     """
     Filter source tracks for "This Is" / "Genre Mix" playlists using engagement scoring.
@@ -336,14 +347,16 @@ def filter_tracks_for_this_is_playlist(
         playlist_type: "artist" or "genre" - controls diversity cap application
         diversity_config: Dict with max_albums_per_artist and max_tracks_per_artist
             (used only when playlist_type == "genre")
+        ollama_max_tracks: Optional absolute maximum track count for Ollama provider.
+            When provided, this value overrides the calculated threshold entirely.
         
     Returns:
         tuple: (filtered_tracks, filter_metadata)
             - filtered_tracks: Subset of tracks to send to LLM
             - filter_metadata: Dict with info about filtering for logging/UI
     """
-    threshold_multiplier = calculate_filter_threshold(target_playlist_size)
-    threshold_count = target_playlist_size * threshold_multiplier
+    threshold_multiplier = calculate_filter_threshold(target_playlist_size, ollama_max_tracks)
+    threshold_count = ollama_max_tracks if ollama_max_tracks is not None else target_playlist_size * threshold_multiplier
     
     # Only filter if source tracks exceed threshold
     if len(source_tracks) <= threshold_count:
@@ -366,6 +379,10 @@ def filter_tracks_for_this_is_playlist(
         and diversity_config.get('max_tracks_per_artist', 0) > 0
     )
     
+    # Initialize for metadata (used in both branches)
+    max_albums = 0
+    max_tracks = 0
+    
     if apply_diversity:
         max_albums = int(diversity_config['max_albums_per_artist'])
         max_tracks = int(diversity_config['max_tracks_per_artist'])
@@ -382,7 +399,10 @@ def filter_tracks_for_this_is_playlist(
     
     # Log filtering decision and final payload
     print(f"🎯 FILTERING DECISION:")
-    print(f"   🎯 Threshold: {threshold_count} tracks (target: {target_playlist_size} × {threshold_multiplier}x multiplier)")
+    if ollama_max_tracks is not None:
+        print(f"   🎯 Ollama max tracks threshold: {threshold_count} tracks (absolute limit)")
+    else:
+        print(f"   🎯 Threshold: {threshold_count} tracks (target: {target_playlist_size} × {threshold_multiplier}x multiplier)")
     print(f"   ✂️  Filtered {len(source_tracks)} → {len(filtered_tracks)} tracks for LLM payload")
     print(f"   📤 Payload reduction: {((len(source_tracks) - len(filtered_tracks)) / len(source_tracks) * 100):.1f}%")
     if apply_diversity:
@@ -396,8 +416,9 @@ def filter_tracks_for_this_is_playlist(
         'threshold_multiplier': threshold_multiplier,
         'diversity_applied': apply_diversity,
         'diversity_dropped': diversity_dropped,
-        'max_albums_per_artist': max_albums if apply_diversity else 0,
-        'max_tracks_per_artist': max_tracks if apply_diversity else 0,
+        'max_albums_per_artist': max_albums,
+        'max_tracks_per_artist': max_tracks,
+        'ollama_max_tracks': ollama_max_tracks,
         'score_range': {
             'highest': scored_tracks[0][0] if scored_tracks else 0,
             'lowest': scored_tracks[threshold_count-1][0] if len(scored_tracks) >= threshold_count else 0,

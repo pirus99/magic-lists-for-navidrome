@@ -306,16 +306,25 @@ async def create_playlist(
         # NEW: Apply smart filtering for "This Is" playlists to optimize LLM payload
         library_stats = await nav_client.get_library_stats()
         
+        # Check if Ollama provider is being used and get max tracks override
+        ollama_max_tracks = None
+        if ai_client_instance.provider.provider_type == "ollama":
+            ollama_max_tracks = int(os.getenv("OLLAMA_MAX_TRACKS", "0")) or None
+        
         filtered_tracks, filter_metadata = filter_tracks_for_this_is_playlist(
             source_tracks=all_tracks,
             target_playlist_size=request.playlist_length,
             library_stats=library_stats,
-            playlist_type="artist"
+            playlist_type="artist",
+            ollama_max_tracks=ollama_max_tracks
         )
         
         # Log filtering results for analytics/debugging
         if filter_metadata['filtered']:
-            scheduler_logger.info(f"🎯 Smart filtering applied: {filter_metadata['source_count']} → {filter_metadata['sent_count']} tracks (multiplier: {filter_metadata['threshold_multiplier']}x)")
+            if ollama_max_tracks:
+                scheduler_logger.info(f"🎯 Smart filtering applied (Ollama max): {filter_metadata['source_count']} → {filter_metadata['sent_count']} tracks (limit: {ollama_max_tracks})")
+            else:
+                scheduler_logger.info(f"🎯 Smart filtering applied: {filter_metadata['source_count']} → {filter_metadata['sent_count']} tracks (multiplier: {filter_metadata['threshold_multiplier']}x)")
             scheduler_logger.info(f"📊 Score range: {filter_metadata['score_range']['highest']:.1f} - {filter_metadata['score_range']['lowest']:.1f} (cutoff: {filter_metadata['score_range']['cutoff']:.1f})")
         else:
             scheduler_logger.info(f"✅ No filtering needed: {filter_metadata['source_count']} tracks below threshold")
@@ -524,17 +533,26 @@ async def create_genre_playlist(
             "max_tracks_per_artist": 12
         })
 
+        # Check if Ollama provider is being used and get max tracks override
+        ollama_max_tracks = None
+        if ai_client_instance.provider.provider_type == "ollama":
+            ollama_max_tracks = int(os.getenv("OLLAMA_MAX_TRACKS", "0")) or None
+
         filtered_tracks, filter_metadata = filter_tracks_for_this_is_playlist(
             source_tracks=all_tracks,
             target_playlist_size=request.playlist_length,
             library_stats=library_stats,
             playlist_type="genre",
-            diversity_config=diversity_config
+            diversity_config=diversity_config,
+            ollama_max_tracks=ollama_max_tracks
         )
 
         # Log filtering results for analytics/debugging
         if filter_metadata['filtered']:
-            scheduler_logger.info(f"🎯 Smart filtering applied: {filter_metadata['source_count']} → {filter_metadata['sent_count']} tracks (multiplier: {filter_metadata['threshold_multiplier']}x)")
+            if ollama_max_tracks:
+                scheduler_logger.info(f"🎯 Smart filtering applied (Ollama max): {filter_metadata['source_count']} → {filter_metadata['sent_count']} tracks (limit: {ollama_max_tracks})")
+            else:
+                scheduler_logger.info(f"🎯 Smart filtering applied: {filter_metadata['source_count']} → {filter_metadata['sent_count']} tracks (multiplier: {filter_metadata['threshold_multiplier']}x)")
             scheduler_logger.info(f"📊 Score range: {filter_metadata['score_range']['highest']:.1f} - {filter_metadata['score_range']['lowest']:.1f} (cutoff: {filter_metadata['score_range']['cutoff']:.1f})")
             if filter_metadata.get('diversity_applied'):
                 scheduler_logger.info(f"🎭 Diversity caps applied: max {filter_metadata['max_albums_per_artist']} albums / {filter_metadata['max_tracks_per_artist']} tracks per artist (dropped {filter_metadata['diversity_dropped']} tracks)")

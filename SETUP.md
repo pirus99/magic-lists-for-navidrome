@@ -31,6 +31,9 @@ AI_MODEL=meta-llama/llama-3.3-70b-instruct     # Optional, uses provider default
 
 # Optional - Ollama timeout (only for ollama provider)
 OLLAMA_TIMEOUT=180                   # Seconds, increase for slower CPUs
+
+# Optional - Ollama max tracks (only for ollama provider)
+OLLAMA_MAX_TRACKS=180              # Absolute maximum tracks to send to LLM (overrides dynamic threshold)
 ```
 
 ### 3. For Docker Deployment

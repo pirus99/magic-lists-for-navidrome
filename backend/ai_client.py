@@ -382,21 +382,8 @@ class AIClient:
                         return final_selection, description
                     else:
                         return final_selection
-
-                # Handle simple array format (legacy)
-                elif isinstance(response_data, list) and all(isinstance(tid, str) for tid in response_data):
-                    valid_ids = {track["id"] for track in candidate_tracks}
-                    filtered_ids = [tid for tid in response_data if tid in valid_ids]
-                    final_selection = filtered_ids[:num_tracks]
-
-                    # AI curation successful for Genre Mix (logging moved to scheduler_logger)
-
-                    if include_description:
-                        return final_selection, ""  # No description available
-                    else:
-                        return final_selection
                 else:
-                    raise ValueError("Invalid response format: expected dict with track_ids or array of track IDs")
+                    raise ValueError("Invalid response format: expected dict with track_ids")
 
             except (json.JSONDecodeError, ValueError) as e:
                 print(f"Failed to parse AI response: {e}")
@@ -827,9 +814,7 @@ class AIClient:
             print(f"🔢 Using index-based approach for {len(track_id_map)} tracks")
             
             user_content = (
-                f"Select {num_tracks} tracks for a {genre_names} playlist.\n"
-                f"The data below is a list of tracks, each represented as a tuple:\n"
-                f'(index, "title - artist", year, score)\n'
+                f"Select {num_tracks} tracks for your {genre_names} playlist.\n"
                 f"Tracks: {indexed_tracks}\n"
             )
 
@@ -974,32 +959,8 @@ class AIClient:
                         return final_selection, description
                     else:
                         return final_selection
-
-                # Handle simple array format (legacy)
-                elif isinstance(response_data, list) and all(isinstance(tid, str) for tid in response_data):
-                    valid_ids = {track["id"] for track in candidate_tracks}
-                    filtered_ids = [tid for tid in response_data if tid in valid_ids]
-                    final_selection = filtered_ids[:num_tracks]
-
-                    # AI curation successful for Genre Mix (logging moved to scheduler_logger)
-
-                    # Generate the description in a separate AI request (if requested)
-                    description = ""
-                    if include_description:
-                        description = await self._generate_genre_description(
-                            description_instructions=description_instructions,
-                            selected_track_ids=final_selection,
-                            candidate_tracks=candidate_tracks,
-                            genre_names=genre_names,
-                            llm_config=description_llm_config
-                        )
-
-                    if include_description:
-                        return final_selection, description
-                    else:
-                        return final_selection
                 else:
-                    raise ValueError("Invalid response format: expected dict with track_ids or array of track IDs")
+                    raise ValueError("Invalid response format: expected dict with track_ids")
 
             except (json.JSONDecodeError, ValueError) as e:
                 print(f"Failed to parse AI response: {e}")
