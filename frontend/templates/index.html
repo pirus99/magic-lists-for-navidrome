@@ -573,6 +573,74 @@
                              </div>
                          </div>
 
+                        <!-- Filter Options Row -->
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <!-- Year Range Filter -->
+                            <div>
+                                <label class="block text-sm text-gray-900 font-bold mb-2">Year Range</label>
+                                <div class="flex items-center gap-2">
+                                    <input type="number" id="genre-year-start" name="genre-year-start" min="1950" max="2026"
+                                        class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:border-blue-500 focus:ring-blue-500"
+                                        placeholder="Start year (e.g. 1970)">
+                                    <span class="text-gray-400 text-sm">–</span>
+                                    <input type="number" id="genre-year-end" name="genre-year-end" min="1950" max="2026"
+                                        class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:border-blue-500 focus:ring-blue-500"
+                                        placeholder="End year (e.g. 1980)">
+                                </div>
+                            </div>
+
+                            <!-- Artist Blacklist Filter -->
+                            <div>
+                                <label for="genre-blacklist-select" class="block text-sm text-gray-900 font-bold mb-2">Exclude Artists</label>
+                                <div class="relative">
+                                    <select
+                                        id="genre-blacklist-select"
+                                        multiple
+                                        data-hs-select='{
+                                            "placeholder": "Search artists to exclude...",
+                                            "toggleTag": "<button type=\"button\"></button>",
+                                            "toggleClasses": "hs-select-disabled:pointer-events-none hs-select-disabled:opacity-50 relative py-2 px-3 pe-9 flex text-nowrap w-full cursor-pointer bg-white border border-gray-200 rounded-lg text-start text-sm focus:border-blue-500 focus:ring-blue-500 before:absolute before:inset-0 before:z-[1]",
+                                            "dropdownClasses": "hs-select-dropdown mt-2 z-50 w-full max-h-72 p-1 space-y-0.5 bg-white border border-gray-200 rounded-lg overflow-hidden overflow-y-auto [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-track]:bg-gray-100 [&::-webkit-scrollbar-thumb]:bg-gray-300",
+                                            "optionClasses": "py-2 px-4 w-full text-sm text-gray-800 cursor-pointer hover:bg-gray-100 rounded-lg focus:outline-none focus:bg-gray-100 hs-selected:bg-blue-50 hs-selected:text-blue-800",
+                                            "optionTemplate": "<div class=\"flex justify-between items-center w-full\"><span data-title></span><span class=\"hs-selected:block\"><svg class=\"flex-shrink-0 size-3.5 text-blue-600\" xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><polyline points=\"20 6 9 17 4 12\"/></svg></span></div>",
+                                            "hasSearch": true,
+                                            "searchPlaceholder": "Search...",
+                                            "searchClasses": "block w-full text-sm border-gray-200 rounded-lg focus:border-blue-500 focus:ring-blue-500 before:absolute before:inset-0 before:z-[1] py-2 px-3",
+                                            "searchWrapperClasses": "bg-white p-2 -mx-1 sticky top-0",
+                                            "multiple": true
+                                        }'
+                                        class="hidden"
+                                    >
+                                        <option value="">Select artists to exclude</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <!-- Quality Profile Filter -->
+                            <div>
+                                <label class="block text-sm text-gray-900 font-bold mb-2">Minimum Quality</label>
+                                <div class="grid grid-cols-2 gap-2">
+                                    <select id="genre-min-bitrate" name="genre-min-bitrate"
+                                        class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:border-blue-500 focus:ring-blue-500">
+                                        <option value="">Any bitrate</option>
+                                        <option value="128">128 kbps</option>
+                                        <option value="192">192 kbps</option>
+                                        <option value="256">256 kbps</option>
+                                        <option value="320">320 kbps</option>
+                                    </select>
+                                    <select id="genre-min-format" name="genre-min-format"
+                                        class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:border-blue-500 focus:ring-blue-500">
+                                        <option value="">Any format</option>
+                                        <option value="mp3">MP3</option>
+                                        <option value="aac">AAC</option>
+                                        <option value="flac">FLAC</option>
+                                        <option value="alac">ALAC</option>
+                                        <option value="wav">WAV</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+
                         <!-- Options Grid -->
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <!-- Playlist Length -->

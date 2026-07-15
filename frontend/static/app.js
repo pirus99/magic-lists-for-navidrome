@@ -476,8 +476,64 @@ function handleGenreSelection(e) {
 
     if (selectedGenres.length > 0) {
         submitBtn.disabled = false;
+        // Load blacklist artists when genres are selected
+        loadBlacklistArtists();
     } else {
         submitBtn.disabled = true;
+    }
+}
+
+// Load artists for blacklist dropdown (filtered by selected genres)
+let blacklistArtistsLoaded = false;
+async function loadBlacklistArtists() {
+    if (blacklistArtistsLoaded) return;
+    
+    try {
+        if (selectedGenres.length === 0) {
+            showToast('error', 'Please select genres first');
+            return;
+        }
+
+        let url = `/api/artists-by-genre?genres=${encodeURIComponent(selectedGenres.join(','))}`;
+        if (selectedLibraryIds.length > 0) {
+            const libraryIdsParam = selectedLibraryIds.map(id => `library_id=${encodeURIComponent(id)}`).join('&');
+            url += `&${libraryIdsParam}`;
+        }
+        const response = await fetch(url);
+        if (!response.ok) {
+            throw new Error('Failed to fetch artists');
+        }
+        const artists = await response.json();
+
+        const blacklistSelect = document.getElementById('genre-blacklist-select');
+        if (blacklistSelect) {
+            // Clear existing options except the first one
+            while (blacklistSelect.options.length > 1) {
+                blacklistSelect.remove(1);
+            }
+
+            // Add artist options
+            artists.forEach(artist => {
+                const option = document.createElement('option');
+                option.value = artist.name;
+                option.textContent = artist.name;
+                blacklistSelect.appendChild(option);
+            });
+
+            // Reinitialize the HSSelect component
+            if (window.HSSelect) {
+                const selectInstance = window.HSSelect.getInstance(blacklistSelect);
+                if (selectInstance) {
+                    selectInstance.destroy();
+                }
+                window.HSSelect.autoInit();
+            }
+            
+            blacklistArtistsLoaded = true;
+        }
+    } catch (error) {
+        console.error('Error loading blacklist artists:', error);
+        showToast('error', 'Failed to load artists for blacklist');
     }
 }
 
@@ -871,6 +927,16 @@ async function createGenrePlaylist() {
     try {
         const refreshFrequency = document.querySelector('input[name="genre-refresh-frequency"]:checked').value;
         const playlistLength = document.querySelector('input[name="genre-playlist-length"]:checked').value;
+        
+        // Get filter values
+        const yearStart = document.getElementById('genre-year-start').value;
+        const yearEnd = document.getElementById('genre-year-end').value;
+        const minBitrate = document.getElementById('genre-min-bitrate').value;
+        const minFormat = document.getElementById('genre-min-format').value;
+        
+        // Get blacklisted artists from multi-select
+        const blacklistSelect = document.getElementById('genre-blacklist-select');
+        const blacklistedArtists = blacklistSelect ? Array.from(blacklistSelect.selectedOptions).map(opt => opt.value) : [];
 
         const response = await fetch('/api/create_genre_playlist', {
             method: 'POST',
@@ -881,7 +947,13 @@ async function createGenrePlaylist() {
                 genres: selectedGenres,
                 refresh_frequency: refreshFrequency,
                 playlist_length: parseInt(playlistLength),
-                library_ids: selectedLibraryIds
+                library_ids: selectedLibraryIds,
+                // Filter options
+                year_start: yearStart ? parseInt(yearStart) : null,
+                year_end: yearEnd ? parseInt(yearEnd) : null,
+                blacklisted_artists: blacklistedArtists,
+                min_bitrate: minBitrate ? parseInt(minBitrate) : null,
+                min_format: minFormat || null
             })
         });
 
@@ -1303,7 +1375,7 @@ function getStatusIcon(status) {
     switch (status) {
         case 'success':
             return `<svg class="w-5 h-5 text-green-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
-                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"></path>
             </svg>`;
         case 'warning':
             return `<svg class="w-5 h-5 text-yellow-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">

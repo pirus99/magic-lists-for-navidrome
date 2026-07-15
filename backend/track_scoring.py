@@ -561,7 +561,13 @@ def filter_tracks_for_this_is_playlist(
     exploration_ratio: float = 0.0,
     high_tier_ratio: float = 0.4,
     high_tier_multiplier: float = 3.0,
-    random_seed: Optional[int] = None
+    random_seed: Optional[int] = None,
+    # Filter options
+    year_start: Optional[int] = None,
+    year_end: Optional[int] = None,
+    blacklisted_artists: Optional[List[str]] = None,
+    min_bitrate: Optional[int] = None,
+    min_format: Optional[str] = None
 ) -> Tuple[List[Dict], Dict[str, Any]]:
     """
     Filter source tracks for "This Is" / "Genre Mix" playlists using engagement scoring.
@@ -589,6 +595,11 @@ def filter_tracks_for_this_is_playlist(
         high_tier_multiplier: Size of the high-tier candidate pool as a multiple of the core
             count. Default 3.0.
         random_seed: Optional seed for reproducible runs (None = fresh variety each call).
+        year_start: Optional minimum release year filter (1950-2026).
+        year_end: Optional maximum release year filter (1950-2026).
+        blacklisted_artists: Optional list of artist names to exclude.
+        min_bitrate: Optional minimum bitrate in kbps (128, 192, 256, 320).
+        min_format: Optional minimum format (mp3, flac, aac, etc.).
         
     Returns:
         tuple: (filtered_tracks, filter_metadata)
@@ -598,18 +609,78 @@ def filter_tracks_for_this_is_playlist(
     threshold_multiplier = calculate_filter_threshold(target_playlist_size, ollama_max_tracks)
     threshold_count = ollama_max_tracks if ollama_max_tracks is not None else target_playlist_size * threshold_multiplier
     
+    # Apply pre-scoring filters (year, artist blacklist, quality)
+    pre_filtered_tracks = []
+    filter_stats = {
+        'year_filtered': 0,
+        'artist_filtered': 0,
+        'quality_filtered': 0
+    }
+    
+    # Normalize blacklisted artists to lowercase for case-insensitive matching
+    blacklisted_lower = set()
+    if blacklisted_artists:
+        blacklisted_lower = {a.lower().strip() for a in blacklisted_artists if a}
+    
+    for track in source_tracks:
+        # Year filter
+        track_year = track.get('year')
+        if year_start is not None and track_year is not None and track_year < year_start:
+            filter_stats['year_filtered'] += 1
+            continue
+        if year_end is not None and track_year is not None and track_year > year_end:
+            filter_stats['year_filtered'] += 1
+            continue
+        
+        # Artist blacklist filter
+        track_artist = track.get('artist', '')
+        artist_match = False
+        if blacklisted_lower:
+            # Check if any blacklisted artist matches (case-insensitive)
+            track_artists = _split_artists(track_artist)
+            for ta in track_artists:
+                if ta in blacklisted_lower:
+                    artist_match = True
+                    break
+            if artist_match:
+                filter_stats['artist_filtered'] += 1
+                continue
+        
+        # Quality filter (bitrate and format)
+        track_bitrate = track.get('bit_rate', 0) or 0
+        track_format = track.get('format', '').lower() or ''
+        
+        if min_bitrate is not None and track_bitrate > 0 and track_bitrate < min_bitrate:
+            filter_stats['quality_filtered'] += 1
+            continue
+        
+        if min_format is not None and track_format and track_format != min_format.lower():
+            filter_stats['quality_filtered'] += 1
+            continue
+        
+        pre_filtered_tracks.append(track)
+    
+    # Log pre-filtering stats
+    if any(filter_stats.values()):
+        print(f"🔍 PRE-FILTERING APPLIED:")
+        print(f"   📅 Year filter: {filter_stats['year_filtered']} tracks excluded")
+        print(f"   🚫 Artist blacklist: {filter_stats['artist_filtered']} tracks excluded")
+        print(f"   🎧 Quality filter: {filter_stats['quality_filtered']} tracks excluded")
+        print(f"   📊 Remaining: {len(pre_filtered_tracks)} tracks (from {len(source_tracks)})")
+    
     # Only filter if source tracks exceed threshold
-    if len(source_tracks) <= threshold_count:
-        return source_tracks, {
+    if len(pre_filtered_tracks) <= threshold_count:
+        return pre_filtered_tracks, {
             'filtered': False,
             'reason': 'below_threshold',
-            'source_count': len(source_tracks),
-            'sent_count': len(source_tracks),
-            'diversity_applied': False
+            'source_count': len(pre_filtered_tracks),
+            'sent_count': len(pre_filtered_tracks),
+            'diversity_applied': False,
+            'pre_filter_stats': filter_stats
         }
     
     # Score all tracks
-    scored_tracks = score_tracks_by_user_engagement(source_tracks, library_stats)
+    scored_tracks = score_tracks_by_user_engagement(pre_filtered_tracks, library_stats)
     
     # Determine whether per-artist diversity caps should be applied
     apply_diversity = (
@@ -670,8 +741,8 @@ def filter_tracks_for_this_is_playlist(
         print(f"   🎯 Ollama max tracks threshold: {threshold_count} tracks (absolute limit)")
     else:
         print(f"   🎯 Threshold: {threshold_count} tracks (target: {target_playlist_size} × {threshold_multiplier}x multiplier)")
-    print(f"   ✂️  Filtered {len(source_tracks)} → {len(filtered_tracks)} tracks for LLM payload")
-    print(f"   📤 Payload reduction: {((len(source_tracks) - len(filtered_tracks)) / len(source_tracks) * 100):.1f}%")
+    print(f"   ✂️  Filtered {len(pre_filtered_tracks)} → {len(filtered_tracks)} tracks for LLM payload")
+    print(f"   📤 Payload reduction: {((len(pre_filtered_tracks) - len(filtered_tracks)) / len(pre_filtered_tracks) * 100):.1f}%")
     if use_diverse_selection:
         print(f"   🎲 Diversified selection: core {selection_meta.get('core_count', 0)} "
               f"(from top {selection_meta.get('high_tier_size', 0)}) + explore "
@@ -703,6 +774,7 @@ def filter_tracks_for_this_is_playlist(
     filter_metadata = {
         'filtered': True,
         'source_count': len(source_tracks),
+        'pre_filtered_count': len(pre_filtered_tracks),
         'sent_count': len(filtered_tracks),
         'threshold_multiplier': threshold_multiplier,
         'diversity_applied': apply_diversity,
@@ -715,7 +787,8 @@ def filter_tracks_for_this_is_playlist(
         'high_tier_ratio': high_tier_ratio,
         'high_tier_multiplier': high_tier_multiplier,
         'selection_meta': selection_meta,
-        'score_range': score_range
+        'score_range': score_range,
+        'pre_filter_stats': filter_stats
     }
     
     return filtered_tracks, filter_metadata

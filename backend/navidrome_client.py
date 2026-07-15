@@ -696,6 +696,45 @@ class NavidromeClient:
             print(f"❌ Fallback method also failed: {e}")
             return []
 
+    async def get_artists_by_genres(self, genres: List[str], library_ids: List[str] = None) -> List[Dict[str, Any]]:
+        """Fetch artists that have tracks in the specified genres
+
+        Args:
+            genres: List of genre names to filter artists by
+            library_ids: Optional list of library IDs to filter tracks
+
+        Returns:
+            List of artists with format: {id, name}
+        """
+        try:
+            await self._ensure_authenticated()
+
+            # Fetch tracks for the specified genres
+            tracks = await self.get_tracks_by_genres(genres, library_ids)
+
+            # Extract unique artists from tracks
+            artists_map = {}
+            for track in tracks:
+                artist_name = track.get('artist')
+                if artist_name and artist_name not in artists_map:
+                    # Generate a stable ID from the artist name (since we don't have artist IDs here)
+                    artist_id = str(abs(hash(artist_name)) % (10**12))
+                    artists_map[artist_name] = {
+                        'id': artist_id,
+                        'name': artist_name
+                    }
+
+            artists_list = list(artists_map.values())
+            # Sort by name
+            artists_list.sort(key=lambda x: x['name'].lower())
+
+            print(f"✅ Found {len(artists_list)} unique artists across {len(genres)} genres")
+            return artists_list
+
+        except Exception as e:
+            print(f"❌ Error in get_artists_by_genres: {e}")
+            raise
+
     async def get_genres(self, library_ids: Union[List[str], str, None] = None) -> List[Dict[str, Any]]:
         """Fetch all available genres from Navidrome with track counts
 

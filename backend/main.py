@@ -209,6 +209,23 @@ async def get_genres(library_id: List[str] = Query(None)):
         else:
             raise HTTPException(status_code=500, detail=f"Failed to fetch genres: {error_msg}")
 
+@app.get("/api/artists-by-genre")
+async def get_artists_by_genre(genres: List[str] = Query(...), library_id: List[str] = Query(None)):
+    """Get list of artists that have tracks in the specified genres"""
+    try:
+        client = get_navidrome_client()
+        artists = await client.get_artists_by_genres(genres, library_id)
+        return artists
+    except Exception as e:
+        error_msg = str(e)
+        # Check if it's an authentication error and return appropriate status code
+        if "Invalid username or password" in error_msg or "No authentication method available" in error_msg:
+            raise HTTPException(status_code=401, detail=error_msg)
+        elif "Network error" in error_msg or "connecting to Navidrome" in error_msg:
+            raise HTTPException(status_code=503, detail=f"Cannot connect to Navidrome server: {error_msg}")
+        else:
+            raise HTTPException(status_code=500, detail=f"Failed to fetch artists by genre: {error_msg}")
+
 @app.get("/api/music-folders")
 async def get_music_folders():
     """Get list of music folders/libraries from Navidrome"""
@@ -557,18 +574,28 @@ async def create_genre_playlist(
             ollama_max_tracks=ollama_max_tracks,
             exploration_ratio=diversity_config.get("exploration_ratio", 0.0),
             high_tier_ratio=diversity_config.get("high_tier_ratio", 0.4),
-            high_tier_multiplier=diversity_config.get("high_tier_multiplier", 3.0)
+            high_tier_multiplier=diversity_config.get("high_tier_multiplier", 3.0),
+            # Filter options
+            year_start=request.year_start,
+            year_end=request.year_end,
+            blacklisted_artists=request.blacklisted_artists,
+            min_bitrate=request.min_bitrate,
+            min_format=request.min_format
         )
 
         # Log filtering results for analytics/debugging
         if filter_metadata['filtered']:
             if ollama_max_tracks:
-                scheduler_logger.info(f"🎯 Smart filtering applied (Ollama max): {filter_metadata['source_count']} → {filter_metadata['sent_count']} tracks (limit: {ollama_max_tracks})")
+                scheduler_logger.info(f"🎯 Smart filtering applied (Ollama max): {filter_metadata['source_count']} → {filter_metadata['pre_filtered_count']} (pre-filter) → {filter_metadata['sent_count']} tracks (limit: {ollama_max_tracks})")
             else:
-                scheduler_logger.info(f"🎯 Smart filtering applied: {filter_metadata['source_count']} → {filter_metadata['sent_count']} tracks (multiplier: {filter_metadata['threshold_multiplier']}x)")
+                scheduler_logger.info(f"🎯 Smart filtering applied: {filter_metadata['source_count']} → {filter_metadata['pre_filtered_count']} (pre-filter) → {filter_metadata['sent_count']} tracks (multiplier: {filter_metadata['threshold_multiplier']}x)")
             scheduler_logger.info(f"📊 Score range: {filter_metadata['score_range']['highest']:.1f} - {filter_metadata['score_range']['lowest']:.1f} (cutoff: {filter_metadata['score_range']['cutoff']:.1f})")
             if filter_metadata.get('diversity_applied'):
                 scheduler_logger.info(f"🎭 Diversity caps applied: max {filter_metadata['max_albums_per_artist']} albums / {filter_metadata['max_tracks_per_artist']} tracks per artist (dropped {filter_metadata['diversity_dropped']} tracks)")
+            # Log pre-filter stats
+            pre_stats = filter_metadata.get('pre_filter_stats', {})
+            if any(pre_stats.values()):
+                scheduler_logger.info(f"🔍 Pre-filters: year={pre_stats.get('year_filtered', 0)}, blacklist={pre_stats.get('artist_filtered', 0)}, quality={pre_stats.get('quality_filtered', 0)}")
         else:
             scheduler_logger.info(f"✅ No filtering needed: {filter_metadata['source_count']} tracks below threshold")
 

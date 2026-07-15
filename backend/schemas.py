@@ -24,6 +24,12 @@ class CreateGenrePlaylistRequest(BaseModel):
     refresh_frequency: str = "none"  # "none", "daily", "weekly", "monthly"
     playlist_length: int = 25  # Number of tracks to include
     library_ids: List[str] = []  # List of library IDs to filter tracks
+    # Filter options
+    year_start: Optional[int] = None  # Minimum release year (1950-2026)
+    year_end: Optional[int] = None  # Maximum release year (1950-2026)
+    blacklisted_artists: List[str] = []  # Artist names to exclude from selection
+    min_bitrate: Optional[int] = None  # Minimum bitrate in kbps (128, 192, 256, 320)
+    min_format: Optional[str] = None  # Minimum format (mp3, flac, aac, etc.)
 
 class Playlist(BaseModel):
     """Schema for a stored playlist"""

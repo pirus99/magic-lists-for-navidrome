@@ -66,6 +66,7 @@ def ensure_artist_spacing(playlist: list[dict], spacing: int = 1) -> list[dict]:
 
     for skipped_song in skipped_songs:
         new_playlist.append(skipped_song)
+        skipped_songs.remove(skipped_song)
         non_spaced_songs_count += 1
 
     if repositioned_songs_count == 0 and non_spaced_songs_count == 0:
@@ -145,6 +146,7 @@ def ensure_album_spacing(playlist: list[dict], spacing: int = 1) -> list[dict]:
 
     for skipped_song in skipped_songs:
         new_playlist.append(skipped_song)
+        skipped_songs.remove(skipped_song)
         non_spaced_songs_count += 1
 
     if repositioned_songs_count == 0 and non_spaced_songs_count == 0:
