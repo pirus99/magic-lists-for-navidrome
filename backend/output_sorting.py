@@ -66,7 +66,6 @@ def ensure_artist_spacing(playlist: list[dict], spacing: int = 1) -> list[dict]:
 
     for skipped_song in skipped_songs:
         new_playlist.append(skipped_song)
-        skipped_songs.remove(skipped_song)
         non_spaced_songs_count += 1
 
     if repositioned_songs_count == 0 and non_spaced_songs_count == 0:
@@ -146,7 +145,6 @@ def ensure_album_spacing(playlist: list[dict], spacing: int = 1) -> list[dict]:
 
     for skipped_song in skipped_songs:
         new_playlist.append(skipped_song)
-        skipped_songs.remove(skipped_song)
         non_spaced_songs_count += 1
 
     if repositioned_songs_count == 0 and non_spaced_songs_count == 0:
@@ -173,7 +171,18 @@ def space_id_track_list_by_artist_and_album(track_ids: list[int], candidate_trac
     """
     playlist = []
     # Filter candidate tracks to only include those in track_ids
-    filtered_tracks = [track for track in candidate_tracks if track["id"] in track_ids]
+    filtered_tracks = []
+    added_ids = set()
+    duplicate_count = 0
+    for track in candidate_tracks:
+        if track["id"] in track_ids and track["id"] not in added_ids:
+            filtered_tracks.append(track)
+            added_ids.add(track["id"])
+        elif track["id"] in track_ids and track["id"] in added_ids:
+            duplicate_count += 1
+
+    if duplicate_count >= 1:
+        print(f"⚠️ {duplicate_count} duplicate entries removed from output")
 
     # Ensure artist spacing
     spaced_playlist = ensure_artist_spacing(filtered_tracks, spacing=artist_spacing)
