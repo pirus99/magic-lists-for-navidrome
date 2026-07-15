@@ -35,6 +35,152 @@ def clean_json_response(response: str) -> str:
     
     return cleaned
 
+
+# ---------------------------------------------------------------------------
+# Global, robust AI response parser
+# ---------------------------------------------------------------------------
+# Alternative key names an LLM might use for the track-identifier list.
+_TRACK_ID_KEYS = [
+    "track_ids", "trackIds", "track_id", "track_ids_list",
+    "tracks", "track_list", "tracklist", "song_ids", "songIds",
+    "songs", "ids", "id_list", "idList", "selected_tracks",
+    "selected_track_ids", "playlist", "playlist_tracks", "indices",
+    "indexes", "selected_indices", "selected_ids", "music", "results",
+]
+
+# Alternative key names an LLM might use for a description / summary.
+_DESCRIPTION_KEYS = [
+    "description", "desc", "summary", "about", "note", "blurb",
+    "text", "explanation", "rationale", "details", "comment",
+]
+
+
+def _strip_code_fences(text: str) -> str:
+    """Remove markdown/code fences (``` or ~~~, optional language tag)."""
+    # Backtick fences: ```json ... ``` or ``` ... ```
+    fence = re.search(r"```(?:[a-zA-Z]+)?\s*(.*?)\s*```", text, re.DOTALL)
+    if fence:
+        return fence.group(1).strip()
+    # Tilde fences: ~~~json ... ~~~
+    tilde = re.search(r"~~~(?:[a-zA-Z]+)?\s*(.*?)\s*~~~", text, re.DOTALL)
+    if tilde:
+        return tilde.group(1).strip()
+    return text.strip()
+
+
+def _coerce_to_int_list(values) -> Optional[List[int]]:
+    """Coerce a list of mixed values into a list of ints where possible."""
+    result: List[int] = []
+    for v in values:
+        if isinstance(v, bool):
+            continue
+        if isinstance(v, int):
+            result.append(v)
+        elif isinstance(v, float) and v.is_integer():
+            result.append(int(v))
+        elif isinstance(v, str):
+            s = v.strip()
+            if s.lstrip("-").isdigit():
+                result.append(int(s))
+    return result if result else None
+
+
+def _extract_ids_from_obj(obj: dict) -> Optional[List[int]]:
+    """Extract a track-id list from a dict using any known key alias."""
+    for key in _TRACK_ID_KEYS:
+        if key in obj:
+            val = obj[key]
+            if isinstance(val, list):
+                return _coerce_to_int_list(val)
+            if isinstance(val, str):
+                parts = [p.strip() for p in val.replace("\n", ",").split(",") if p.strip()]
+                return _coerce_to_int_list(parts)
+    return None
+
+
+def _extract_description_from_obj(obj: dict) -> str:
+    """Extract a description string from a dict using any known key alias."""
+    for key in _DESCRIPTION_KEYS:
+        if key in obj and isinstance(obj[key], str):
+            return obj[key].strip()
+    return ""
+
+
+def _find_json_substring(text: str):
+    """Find the first JSON object or array substring in free text."""
+    # Object first (greedy so we capture the whole object including nested braces)
+    obj_match = re.search(r"\{.*\}", text, re.DOTALL)
+    if obj_match:
+        return obj_match.group(0)
+    arr_match = re.search(r"\[.*\]", text, re.DOTALL)
+    if arr_match:
+        return arr_match.group(0)
+    return None
+
+
+def parse_ai_track_response(content: str) -> Tuple[List[int], str]:
+    """Globally robust parser for AI track-selection responses.
+
+    Handles the wide variety of formats an LLM may return:
+    - Plain JSON object: ``{"track_ids": [...], "description": "..."}``
+    - JSON wrapped in markdown code fences (````` ```json ... ````````)
+    - Bare JSON array: ``[1, 2, 3]``
+    - JSON with alternative key names (``tracks``, ``ids``, ``songs``, ``indices``...)
+    - Free-text responses that embed a JSON block
+    - Free-text responses that are just a list of numbers
+
+    Returns:
+        A tuple of ``(track_identifiers, description)`` where ``track_identifiers``
+        is a list of integers (indices or IDs) and ``description`` is a string
+        (possibly empty).
+
+    Raises:
+        ValueError: if no usable track identifiers can be extracted.
+    """
+    if not content or not content.strip():
+        raise ValueError("Empty AI response")
+
+    cleaned = clean_json_response(content.strip())
+
+    # Step 1: strip code fences (handles trailing newlines around fences too)
+    body = _strip_code_fences(cleaned)
+
+    parsed = None
+    # Step 2: try to parse the (fence-stripped) body directly
+    try:
+        parsed = json.loads(body)
+    except (json.JSONDecodeError, ValueError):
+        parsed = None
+
+    # Step 3: try to extract an embedded JSON object/array from prose
+    if parsed is None:
+        sub = _find_json_substring(body)
+        if sub:
+            try:
+                parsed = json.loads(sub)
+            except (json.JSONDecodeError, ValueError):
+                parsed = None
+
+    # Step 4: handle the parsed structure
+    if isinstance(parsed, dict):
+        ids = _extract_ids_from_obj(parsed)
+        if ids is not None:
+            return ids, _extract_description_from_obj(parsed)
+    elif isinstance(parsed, list):
+        ids = _coerce_to_int_list(parsed)
+        if ids is not None:
+            return ids, ""
+
+    # Step 5: last resort - pull every integer out of the response
+    numbers = re.findall(r"-?\d+", cleaned)
+    if numbers:
+        ids = [int(n) for n in numbers]
+        if ids:
+            return ids, ""
+
+    raise ValueError("Could not extract track_ids from AI response")
+
+
 def clean_prompt(prompt):
     prompt = json_minify(prompt)
     return prompt.strip()
@@ -307,83 +453,27 @@ class AIClient:
                     if line.strip():  # Only add non-empty lines
                         cleaned_lines.append(line)
 
-                final_json = '\n'.join(cleaned_lines).strip()
+                # Parse the JSON response with the global, robust parser
+                track_ids, description = parse_ai_track_response(content)
 
-                # Clean the JSON response to handle problematic characters
-                final_json = clean_json_response(final_json)
+                print(f"✅ AI returned {len(track_ids)} tracks (requested: {num_tracks}), validation passed")
 
-                # Try to parse the extracted JSON
-                response_data = json.loads(final_json)
+                # INDEX-BASED: Map indices back to actual track IDs
+                invalid_indices = [idx for idx in track_ids if idx < 0 or idx >= len(track_id_map)]
+                if invalid_indices:
+                    print(f"❌ AI returned {len(invalid_indices)} invalid indices out of {len(track_ids)}")
 
-                # Validate response structure with index-based approach
-                source_track_count = len(candidate_tracks)
-                
-                if isinstance(response_data, dict) and "track_ids" in response_data:
-                    # New format with description - validate structure
-                    track_ids = response_data.get("track_ids", [])
-                    description = response_data.get("description", "")
-                    
-                    # Structure checks
-                    if not isinstance(track_ids, list):
-                        print(f"❌ Response validation failed: track_ids is not a list")
-                        raise ValueError("Response structure invalid: track_ids must be a list")
-                    
-                    if not isinstance(description, str):
-                        print(f"❌ Response validation failed: description is not a string")
-                        raise ValueError("Response structure invalid: description must be a string")
+                # Map valid indices to actual track IDs
+                valid_indices = [idx for idx in track_ids if 0 <= idx < len(track_id_map)]
+                mapped_track_ids = [track_id_map[idx] for idx in valid_indices]
 
-                    # INDEX-BASED: Validate all track IDs are integers (indices)
-                    if not all(isinstance(tid, int) for tid in track_ids):
-                        print(f"❌ Response validation failed: not all track_ids are integers")
-                        raise ValueError("Invalid track_ids format: all IDs must be integers (indices)")
-                    
-                    returned_track_count = len(track_ids)
+                # Final selection (limit to requested count)
+                final_selection = mapped_track_ids[:num_tracks]
 
-                    # Simplified validation - focus on response quality
-                    # Check 1: AI returned some tracks
-                    if returned_track_count == 0:
-                        print(f"❌ AI returned no tracks - invalid response")
-                        raise ValueError("AI response validation failed: No tracks returned")
-
-                    # Check 2: Reasonable upper bound
-                    max_reasonable = int(num_tracks * 1.5)  # Allow up to 1.5x requested for minor flexibility
-                    if returned_track_count > max_reasonable:
-                        print(f"❌ AI returned {returned_track_count} tracks, much more than requested {num_tracks}")
-                        raise ValueError(f"AI response validation failed: Too many tracks returned ({returned_track_count} vs requested {num_tracks})")
-
-                    # Check 3: Allow AI to return more indices than available tracks (for duplicates to reach target count)
-                    # Note: Invalid indices will be filtered out later, duplicates are allowed
-
-                    print(f"✅ AI returned {returned_track_count} tracks (requested: {num_tracks}), validation passed")
-
-                    # INDEX-BASED: Map indices back to actual track IDs
-                    # Find which indices are invalid (out of range)
-                    invalid_indices = [idx for idx in track_ids if idx < 0 or idx >= len(track_id_map)]
-                    if invalid_indices:
-                        print(f"❌ AI returned {len(invalid_indices)} invalid indices out of {len(track_ids)}")
-                    
-                    # Map valid indices to actual track IDs
-                    valid_indices = [idx for idx in track_ids if 0 <= idx < len(track_id_map)]
-                    mapped_track_ids = [track_id_map[idx] for idx in valid_indices]
-                    # Mapped indices to track IDs
-                    
-                    # Final selection (limit to requested count)
-                    final_selection = mapped_track_ids[:num_tracks]
-                    
-                    # AI curation successful for Re-Discover Weekly (logging moved to scheduler_logger)
-                    if description:
-                        # AI description available (logged in main.py scheduler_logger)
-                        pass
-
-                    # Final selection (limit to requested count)
-                    final_selection = mapped_track_ids[:num_tracks]
-
-                    if include_description:
-                        return final_selection, description
-                    else:
-                        return final_selection
+                if include_description:
+                    return final_selection, description
                 else:
-                    raise ValueError("Invalid response format: expected dict with track_ids")
+                    return final_selection
 
             except (json.JSONDecodeError, ValueError) as e:
                 print(f"Failed to parse AI response: {e}")
@@ -609,61 +699,37 @@ class AIClient:
                     if line.strip():  # Only add non-empty lines
                         cleaned_lines.append(line)
 
-                final_json = '\n'.join(cleaned_lines).strip()
-                
-                # Clean the JSON response to handle problematic characters
-                final_json = clean_json_response(final_json)
+                # Parse the JSON response with the global, robust parser
+                track_indices, description = parse_ai_track_response(content)
 
-                # Try to parse the extracted JSON
-                result = json.loads(final_json)
+                print(f"✅ Response validation passed: {len(track_indices)} track indices, description length: {len(description)}")
 
-                # Validate response structure with index-based approach
-                if isinstance(result, dict) and "track_ids" in result:
-                    # New format with description - validate structure
-                    track_indices = result.get("track_ids", [])
-                    description = result.get("description", "")
-
-                    # Structure checks
-                    if not isinstance(track_indices, list):
-                        print(f"❌ Response validation failed: track_ids is not a list")
-                        raise ValueError("Response structure invalid: track_ids must be a list")
-
-                    if not isinstance(description, str):
-                        print(f"❌ Response validation failed: description is not a string")
-                        raise ValueError("Response structure invalid: description must be a string")
-
-                    print(f"✅ Response validation passed: {len(track_indices)} track indices, description length: {len(description)}")
-
-                    # Map indices back to actual track IDs
-                    track_ids = []
-                    for index in track_indices:
-                        if 0 <= index < len(track_id_map):
-                            track_ids.append(track_id_map[index])
-                        else:
-                            print(f"⚠️ Invalid track index {index}, skipping")
-
-                    print(f"🔄 Mapped {len(track_ids)} track IDs from {len(track_indices)} indices")
-
-                    # Ensure we have the right number of tracks
-                    if len(track_ids) < num_tracks and len(candidate_tracks) >= num_tracks:
-                        # Fill with remaining tracks if AI didn't provide enough
-                        used_indices = set(track_indices)
-                        remaining_tracks = [track_id_map[i] for i in range(len(track_id_map)) if i not in used_indices]
-                        track_ids.extend(remaining_tracks[:num_tracks - len(track_ids)])
-                        print(f"🔄 Filled to {len(track_ids)} tracks with remaining candidates")
-
-                    print(f"✅ Phase 2 AI curation successful: returning {len(track_ids)} tracks with description length {len(description)}")
-
-                    if include_description:
-                        return track_ids, description
+                # Map indices back to actual track IDs
+                track_ids = []
+                for index in track_indices:
+                    if 0 <= index < len(track_id_map):
+                        track_ids.append(track_id_map[index])
                     else:
-                        return track_ids
+                        print(f"⚠️ Invalid track index {index}, skipping")
 
+                print(f"🔄 Mapped {len(track_ids)} track IDs from {len(track_indices)} indices")
+
+                # Ensure we have the right number of tracks
+                if len(track_ids) < num_tracks and len(candidate_tracks) >= num_tracks:
+                    # Fill with remaining tracks if AI didn't provide enough
+                    used_indices = set(track_indices)
+                    remaining_tracks = [track_id_map[i] for i in range(len(track_id_map)) if i not in used_indices]
+                    track_ids.extend(remaining_tracks[:num_tracks - len(track_ids)])
+                    print(f"🔄 Filled to {len(track_ids)} tracks with remaining candidates")
+
+                print(f"✅ Phase 2 AI curation successful: returning {len(track_ids)} tracks with description length {len(description)}")
+
+                if include_description:
+                    return track_ids, description
                 else:
-                    print(f"❌ Response validation failed: expected dict with 'track_ids' key, got: {type(result)}")
-                    raise ValueError("Response structure invalid: missing track_ids")
+                    return track_ids
 
-            except json.JSONDecodeError as e:
+            except (json.JSONDecodeError, ValueError) as e:
                 print(f"❌ Failed to parse AI response as JSON: {e}")
                 print(f"🔍 Raw response: {content}")
                 return self._fallback_rediscover_selection(candidate_tracks, num_tracks, include_description, f"AI returned invalid JSON: {e}")
@@ -884,83 +950,60 @@ class AIClient:
                     if line.strip():  # Only add non-empty lines
                         cleaned_lines.append(line)
 
-                final_json = '\n'.join(cleaned_lines).strip()
-                
-                # Clean the JSON response to handle problematic characters
-                final_json = clean_json_response(final_json)
+                # Parse the JSON response with the global, robust parser
+                track_ids, _description = parse_ai_track_response(content)
 
-                # Try to parse the extracted JSON
-                response_data = json.loads(final_json)
+                returned_track_count = len(track_ids)
 
-                # Validate response structure with index-based approach
+                # Simplified validation - focus on response quality
+                # Check 1: AI returned some tracks
+                if returned_track_count == 0:
+                    print(f"❌ AI returned no tracks - invalid response")
+                    raise ValueError("AI response validation failed: No tracks returned")
+
+                # Check 2: Reasonable upper bound
+                max_reasonable = int(num_tracks * 1.5)  # Allow up to 1.5x requested for minor flexibility
+                if returned_track_count > max_reasonable:
+                    print(f"❌ AI returned {returned_track_count} tracks, much more than requested {num_tracks}")
+                    raise ValueError(f"AI response validation failed: Too many tracks returned ({returned_track_count} vs requested {num_tracks})")
+
+                # Check 3: Validate tracks are within source bounds
                 source_track_count = len(candidate_tracks)
+                if returned_track_count > source_track_count:
+                    print(f"❌ AI returned {returned_track_count} tracks but we only provided {source_track_count}")
+                    raise ValueError(f"AI response validation failed: More tracks returned than provided")
 
-                if isinstance(response_data, dict) and "track_ids" in response_data:
-                    # Selection step: only track_ids expected (description generated separately)
-                    track_ids = response_data.get("track_ids", [])
+                print(f"✅ AI returned {returned_track_count} tracks (requested: {num_tracks}), validation passed")
 
-                    # Structure checks
-                    if not isinstance(track_ids, list):
-                        print(f"❌ Response validation failed: track_ids is not a list")
-                        raise ValueError("Response structure invalid: track_ids must be a list")
+                # INDEX-BASED: Map indices back to actual track IDs
+                # Find which indices are invalid (out of range)
+                invalid_indices = [idx for idx in track_ids if idx < 0 or idx >= len(track_id_map)]
+                if invalid_indices:
+                    print(f"❌ AI returned {len(invalid_indices)} invalid indices out of {len(track_ids)}")
 
-                    # INDEX-BASED: Validate all track IDs are integers (indices)
-                    if not all(isinstance(tid, int) for tid in track_ids):
-                        print(f"❌ Response validation failed: not all track_ids are integers")
-                        raise ValueError("Invalid track_ids format: all IDs must be integers (indices)")
+                # Map valid indices to actual track IDs
+                valid_indices = [idx for idx in track_ids if 0 <= idx < len(track_id_map)]
+                mapped_track_ids = [track_id_map[idx] for idx in valid_indices]
+                # Mapped indices to track IDs
 
-                    returned_track_count = len(track_ids)
+                final_selection = space_id_track_list_by_artist_and_album(mapped_track_ids, candidate_tracks, artist_spacing=artist_spacing, album_spacing=album_spacing)
 
-                    # Simplified validation - focus on response quality
-                    # Check 1: AI returned some tracks
-                    if returned_track_count == 0:
-                        print(f"❌ AI returned no tracks - invalid response")
-                        raise ValueError("AI response validation failed: No tracks returned")
+                # Generate the description in a separate AI request (if requested)
+                description = ""
+                if include_description:
+                    description_track_count = num_tracks / 5
+                    description = await self._generate_genre_description(
+                        description_instructions=description_instructions,
+                        selected_track_ids=final_selection[:int(description_track_count)],
+                        candidate_tracks=candidate_tracks,
+                        genre_names=genre_names,
+                        llm_config=description_llm_config
+                    )
 
-                    # Check 2: Reasonable upper bound
-                    max_reasonable = int(num_tracks * 1.5)  # Allow up to 1.5x requested for minor flexibility
-                    if returned_track_count > max_reasonable:
-                        print(f"❌ AI returned {returned_track_count} tracks, much more than requested {num_tracks}")
-                        raise ValueError(f"AI response validation failed: Too many tracks returned ({returned_track_count} vs requested {num_tracks})")
-
-                    # Check 3: Validate tracks are within source bounds
-                    if returned_track_count > source_track_count:
-                        print(f"❌ AI returned {returned_track_count} tracks but we only provided {source_track_count}")
-                        raise ValueError(f"AI response validation failed: More tracks returned than provided")
-
-                    print(f"✅ AI returned {returned_track_count} tracks (requested: {num_tracks}), validation passed")
-
-                    # INDEX-BASED: Map indices back to actual track IDs
-                    # Find which indices are invalid (out of range)
-                    invalid_indices = [idx for idx in track_ids if idx < 0 or idx >= len(track_id_map)]
-                    if invalid_indices:
-                        print(f"❌ AI returned {len(invalid_indices)} invalid indices out of {len(track_ids)}")
-
-                    # Map valid indices to actual track IDs
-                    valid_indices = [idx for idx in track_ids if 0 <= idx < len(track_id_map)]
-                    mapped_track_ids = [track_id_map[idx] for idx in valid_indices]
-                    # Mapped indices to track IDs
-
-                    final_selection = space_id_track_list_by_artist_and_album(mapped_track_ids, candidate_tracks, artist_spacing=artist_spacing, album_spacing=album_spacing)
-
-                    # Generate the description in a separate AI request (if requested)
-                    description = ""
-                    if include_description:
-                        description_track_count = num_tracks / 5
-                        description = await self._generate_genre_description(
-                            description_instructions=description_instructions,
-                            selected_track_ids=final_selection[:int(description_track_count)],
-                            candidate_tracks=candidate_tracks,
-                            genre_names=genre_names,
-                            llm_config=description_llm_config
-                        )
-
-                    if include_description:
-                        return final_selection, description
-                    else:
-                        return final_selection
+                if include_description:
+                    return final_selection, description
                 else:
-                    raise ValueError("Invalid response format: expected dict with track_ids")
+                    return final_selection
 
             except (json.JSONDecodeError, ValueError) as e:
                 print(f"Failed to parse AI response: {e}")
