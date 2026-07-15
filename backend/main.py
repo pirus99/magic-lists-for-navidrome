@@ -311,12 +311,19 @@ async def create_playlist(
         if ai_client_instance.provider.provider_type == "ollama":
             ollama_max_tracks = int(os.getenv("OLLAMA_MAX_TRACKS", "0")) or None
         
+        # Load diversified-selection config from the "this_is" recipe (opt-in, default off)
+        this_is_recipe = recipe_manager.get_recipe("this_is")
+        this_is_sf = this_is_recipe.get("source_filtering", {})
+        
         filtered_tracks, filter_metadata = filter_tracks_for_this_is_playlist(
             source_tracks=all_tracks,
             target_playlist_size=request.playlist_length,
             library_stats=library_stats,
             playlist_type="artist",
-            ollama_max_tracks=ollama_max_tracks
+            ollama_max_tracks=ollama_max_tracks,
+            exploration_ratio=this_is_sf.get("exploration_ratio", 0.0),
+            high_tier_ratio=this_is_sf.get("high_tier_ratio", 0.4),
+            high_tier_multiplier=this_is_sf.get("high_tier_multiplier", 3.0)
         )
         
         # Log filtering results for analytics/debugging
@@ -326,6 +333,9 @@ async def create_playlist(
             else:
                 scheduler_logger.info(f"🎯 Smart filtering applied: {filter_metadata['source_count']} → {filter_metadata['sent_count']} tracks (multiplier: {filter_metadata['threshold_multiplier']}x)")
             scheduler_logger.info(f"📊 Score range: {filter_metadata['score_range']['highest']:.1f} - {filter_metadata['score_range']['lowest']:.1f} (cutoff: {filter_metadata['score_range']['cutoff']:.1f})")
+            if filter_metadata.get('exploration_applied'):
+                sm = filter_metadata.get('selection_meta', {})
+                scheduler_logger.info(f"🎲 Diversified selection: core {sm.get('core_count', 0)} (from top {sm.get('high_tier_size', 0)}) + explore {sm.get('explore_count', 0)} (offset {sm.get('start_offset', 0)}){' [exhausted]' if sm.get('exhausted') else ''}")
         else:
             scheduler_logger.info(f"✅ No filtering needed: {filter_metadata['source_count']} tracks below threshold")
         
@@ -544,7 +554,10 @@ async def create_genre_playlist(
             library_stats=library_stats,
             playlist_type="genre",
             diversity_config=diversity_config,
-            ollama_max_tracks=ollama_max_tracks
+            ollama_max_tracks=ollama_max_tracks,
+            exploration_ratio=diversity_config.get("exploration_ratio", 0.0),
+            high_tier_ratio=diversity_config.get("high_tier_ratio", 0.4),
+            high_tier_multiplier=diversity_config.get("high_tier_multiplier", 3.0)
         )
 
         # Log filtering results for analytics/debugging

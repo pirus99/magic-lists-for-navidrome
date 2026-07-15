@@ -6,6 +6,7 @@ scoring and filtering source tracks based on user listening behavior.
 """
 
 import re
+import random
 from datetime import datetime
 from typing import List, Dict, Tuple, Any, Optional
 
@@ -248,80 +249,306 @@ def _split_artists(artist_field: str) -> List[str]:
     return result
 
 
-def apply_artist_diversity_caps(
+def select_diverse_tracks(
     scored_tracks: List[Tuple[float, Dict]],
-    max_albums_per_artist: int,
-    max_tracks_per_artist: int,
-    keep_limit: int
-) -> Tuple[List[Dict], int]:
+    threshold_count: int,
+    exploration_ratio: float = 0.0,
+    high_tier_ratio: float = 0.4,
+    high_tier_multiplier: float = 3.0,
+    rng: Optional[random.Random] = None
+) -> Tuple[List[Tuple[float, Dict]], Dict[str, Any]]:
     """
-    Enforce per-artist diversity caps on globally score-sorted tracks.
-    
-    Walks the tracks in descending score order and keeps a track only if none of its
-    (possibly multiple, featured) artists has yet exceeded the track cap, and either the
-    album was already seen for every involved artist or no involved artist has yet reached
-    the album cap. Featured artists are treated as a union: if "Lost Frequencies" is capped,
-    a "Lost Frequencies & David Guetta" track is also blocked, while "David Guetta" alone
-    remains selectable.
-    
+    Build a diversified, partially-randomized selection from score-sorted tracks.
+
+    The kept set is composed of two parts:
+    1. **Core (high-scored, randomized):** `high_tier_ratio` of the kept count, randomly
+       sampled from the top `core_count * high_tier_multiplier` scored tracks. This varies
+       *which* high-scoring tracks are chosen between runs while keeping quality high.
+    2. **Exploration (fill-up):** the remaining `1 - high_tier_ratio` of the kept count,
+       filled by walking the score-sorted list starting at a random offset (with wrap),
+       skipping any track already picked for the core. This diversifies the mid-tier
+       selection across runs.
+
     Args:
-        scored_tracks: Globally score-sorted list of (score, track) tuples
+        scored_tracks: Globally score-sorted list of (score, track) tuples (descending)
+        threshold_count: Total number of tracks to keep
+        exploration_ratio: Fraction of the kept set that comes from the exploration band.
+            (Retained for backward-compatibility naming; the core fraction is derived as
+            `1 - exploration_ratio` when `high_tier_ratio` is not explicitly provided.)
+        high_tier_ratio: Fraction of the kept set that forms the randomized high-scored core.
+        high_tier_multiplier: Size of the high-tier candidate pool as a multiple of the
+            core count (pool = top `core_count * high_tier_multiplier` tracks).
+        rng: Optional `random.Random` instance for reproducible runs (None = fresh variety).
+
+    Returns:
+        tuple: (selected, selection_meta)
+            - selected: List of (score, track) tuples (length <= threshold_count)
+            - selection_meta: Dict with core/explore counts, offsets, and exhaustion flag
+    """
+    if rng is None:
+        rng = random.Random()
+
+    # Core fraction: prefer explicit high_tier_ratio, else derive from exploration_ratio
+    core_fraction = high_tier_ratio if high_tier_ratio > 0 else (1.0 - exploration_ratio)
+    core_count = max(0, int(round(threshold_count * core_fraction)))
+    explore_count = max(0, threshold_count - core_count)
+
+    # High-tier candidate pool (top N scored tracks) for the randomized core pick
+    high_tier_size = max(core_count, int(round(core_count * high_tier_multiplier)))
+    high_tier_size = min(high_tier_size, len(scored_tracks))
+
+    core: List[Tuple[float, Dict]] = []
+    if core_count > 0 and high_tier_size > 0:
+        # Sample without replacement from the high-tier pool
+        pool = scored_tracks[:high_tier_size]
+        sample_n = min(core_count, len(pool))
+        core = rng.sample(pool, sample_n)
+
+    core_ids = {id(track) for _, track in core}
+
+    # Random starting offset for the exploration walk (avoids always scanning the same region)
+    start_offset = 0
+    if explore_count > 0 and len(scored_tracks) > core_count:
+        start_offset = rng.randint(core_count, len(scored_tracks) - 1)
+
+    explore: List[Tuple[float, Dict]] = []
+    exhausted = False
+    if explore_count > 0:
+        n = len(scored_tracks)
+        i = 0
+        # Walk at most one full loop; stop early once explore_count is filled
+        while len(explore) < explore_count and i < n:
+            idx = (start_offset + i) % n
+            i += 1
+            score, track = scored_tracks[idx]
+            if id(track) in core_ids:
+                continue
+            explore.append((score, track))
+        exhausted = len(explore) < explore_count
+
+    selected = core + explore
+
+    selection_meta = {
+        'core_count': len(core),
+        'explore_count': len(explore),
+        'high_tier_size': high_tier_size,
+        'start_offset': start_offset,
+        'exhausted': exhausted,
+        'core_fraction': core_fraction,
+    }
+
+    return selected, selection_meta
+
+
+def _track_passes_caps(
+    track: Dict,
+    artist_state: Dict[str, Dict[str, Any]],
+    max_albums_per_artist: int,
+    max_tracks_per_artist: int
+) -> bool:
+    """
+    Check whether a track passes the per-artist diversity caps given current state.
+
+    Mirrors the cap logic in `apply_artist_diversity_caps`: a track is kept only if none of
+    its (possibly multiple, featured) artists has yet exceeded the track cap, and either the
+    album was already seen for every involved artist or no involved artist has yet reached the
+    album cap. Featured artists are treated as a union.
+
+    Args:
+        track: The track dict to test
+        artist_state: Per-artist state dict (artist -> {"track_count": int, "albums": set})
         max_albums_per_artist: Maximum distinct albums allowed per artist
         max_tracks_per_artist: Maximum total tracks allowed per artist
-        keep_limit: Stop once this many tracks have been kept
-        
+
     Returns:
-        tuple: (kept_tracks, dropped_count)
-            - kept_tracks: List of track dicts that passed the caps
-            - dropped_count: Number of tracks skipped due to caps
+        bool: True if the track may be kept without violating any cap
     """
-    kept_tracks: List[Dict] = []
-    dropped_count = 0
-    
-    # Per-artist state: artist -> {"track_count": int, "albums": set}
-    artist_state: Dict[str, Dict[str, Any]] = {}
-    
-    for score, track in scored_tracks:
-        if len(kept_tracks) >= keep_limit:
-            break
-        
-        artist_field = track.get('artist', 'Unknown Artist')
-        album = (track.get('album') or '').strip()
-        
-        # Resolve all involved artists (handles features/collaborations)
-        artists = _split_artists(artist_field)
-        if not artists:
-            artists = [artist_field.strip().lower() or 'unknown artist']
-        
-        # Ensure state exists for each involved artist
-        states = []
-        for a in artists:
-            st = artist_state.get(a)
-            if st is None:
-                st = {'track_count': 0, 'albums': set()}
-                artist_state[a] = st
-            states.append(st)
-        
-        # Skip if ANY involved artist already hit the track cap
-        if any(st['track_count'] >= max_tracks_per_artist for st in states):
-            dropped_count += 1
-            continue
-        
-        album_seen_by_all = all(album in st['albums'] for st in states)
-        # Skip if this is a new album AND every involved artist already hit the album cap
-        if not album_seen_by_all and all(len(st['albums']) >= max_albums_per_artist for st in states):
-            dropped_count += 1
-            continue
-        
-        # Keep the track - count it against every involved artist
-        if album:
-            for st in states:
-                st['albums'].add(album)
+    artist_field = track.get('artist', 'Unknown Artist')
+    album = (track.get('album') or '').strip()
+
+    artists = _split_artists(artist_field)
+    if not artists:
+        artists = [artist_field.strip().lower() or 'unknown artist']
+
+    states = []
+    for a in artists:
+        st = artist_state.get(a)
+        if st is None:
+            st = {'track_count': 0, 'albums': set()}
+            artist_state[a] = st
+        states.append(st)
+
+    # Blocked if ANY involved artist already hit the track cap
+    if any(st['track_count'] >= max_tracks_per_artist for st in states):
+        return False
+
+    album_seen_by_all = all(album in st['albums'] for st in states)
+    # Blocked if this is a new album AND every involved artist already hit the album cap
+    if not album_seen_by_all and all(len(st['albums']) >= max_albums_per_artist for st in states):
+        return False
+
+    return True
+
+
+def _apply_caps_to_track(
+    track: Dict,
+    artist_state: Dict[str, Dict[str, Any]]
+) -> None:
+    """
+    Update per-artist state to count a kept track against every involved artist.
+
+    Must only be called after `_track_passes_caps` returned True for the same track/state.
+    """
+    artist_field = track.get('artist', 'Unknown Artist')
+    album = (track.get('album') or '').strip()
+
+    artists = _split_artists(artist_field)
+    if not artists:
+        artists = [artist_field.strip().lower() or 'unknown artist']
+
+    states = [artist_state[a] for a in artists]
+    if album:
         for st in states:
-            st['track_count'] += 1
-        kept_tracks.append(track)
-    
-    return kept_tracks, dropped_count
+            st['albums'].add(album)
+    for st in states:
+        st['track_count'] += 1
+
+
+def select_diverse_tracks_with_caps(
+    scored_tracks: List[Tuple[float, Dict]],
+    threshold_count: int,
+    exploration_ratio: float = 0.0,
+    high_tier_ratio: float = 0.4,
+    high_tier_multiplier: float = 3.0,
+    max_albums_per_artist: int = 0,
+    max_tracks_per_artist: int = 0,
+    rng: Optional[random.Random] = None
+) -> Tuple[List[Tuple[float, Dict]], Dict[str, Any]]:
+    """
+    Cap-aware selection over the FULL scored list (single source of truth for genre paths).
+
+    Builds the kept set from a high-scored core plus an exploration band, enforcing the
+    per-artist diversity caps *during* the walk over the entire `scored_tracks` list (not as
+    a post-filter on a pre-truncated subset). This guarantees the selection reaches
+    `threshold_count` whenever enough diverse tracks exist, because the walk keeps scanning
+    past capped artists instead of stopping early with a depleted candidate pool.
+
+    Two modes, selected by `exploration_ratio`:
+    - **Diversified** (`exploration_ratio > 0`): the core is a *random sample* from the top
+      `core_count * high_tier_multiplier` scored tracks, and the exploration band walks the
+      full list from a *random offset*. Varies which tracks are chosen between runs.
+    - **Deterministic** (`exploration_ratio <= 0`): the core is the top `threshold_count`
+      tracks by score (no randomization) and the walk proceeds in score order. This reproduces
+      the original `apply_artist_diversity_caps` behavior exactly.
+
+    Args:
+        scored_tracks: Globally score-sorted list of (score, track) tuples (descending)
+        threshold_count: Total number of tracks to keep
+        exploration_ratio: Fraction of the kept set from the exploration band. When > 0 the
+            selection is diversified across runs; when <= 0 the selection is deterministic.
+        high_tier_ratio: Fraction of the kept set that forms the high-scored core (diversified
+            mode only).
+        high_tier_multiplier: Size of the high-tier candidate pool as a multiple of the core
+            count (pool = top `core_count * high_tier_multiplier` tracks). Diversified mode only.
+        max_albums_per_artist: Maximum distinct albums allowed per artist (0 disables).
+        max_tracks_per_artist: Maximum total tracks allowed per artist (0 disables).
+        rng: Optional `random.Random` instance for reproducible runs (None = fresh variety).
+
+    Returns:
+        tuple: (selected, selection_meta)
+            - selected: List of (score, track) tuples (length <= threshold_count)
+            - selection_meta: Dict with core/explore counts, caps_dropped, offsets, exhaustion
+    """
+    if rng is None:
+        rng = random.Random()
+
+    caps_enabled = max_albums_per_artist > 0 and max_tracks_per_artist > 0
+    diversified = exploration_ratio > 0
+
+    # Core fraction: diversified uses high_tier_ratio; deterministic takes the whole set
+    # (the exploration band is empty, so the core IS the full selection in score order).
+    core_fraction = high_tier_ratio if (diversified and high_tier_ratio > 0) else (1.0 - exploration_ratio if diversified else 1.0)
+    core_count = max(0, int(round(threshold_count * core_fraction)))
+
+    high_tier_size = max(core_count, int(round(core_count * high_tier_multiplier)))
+    high_tier_size = min(high_tier_size, len(scored_tracks))
+
+    artist_state: Dict[str, Dict[str, Any]] = {}
+    core: List[Tuple[float, Dict]] = []
+    caps_dropped = 0
+
+    if core_count > 0 and high_tier_size > 0:
+        if diversified:
+            # Random sample without replacement from the high-tier pool; only keep tracks
+            # that pass caps. Keep sampling until we fill the core or exhaust the pool.
+            pool = scored_tracks[:high_tier_size]
+            attempts = 0
+            max_attempts = max(len(pool), 1) * 4  # bound work; pool is small relative to source
+            while len(core) < core_count and attempts < max_attempts:
+                candidate = rng.choice(pool)
+                attempts += 1
+                if caps_enabled and not _track_passes_caps(candidate[1], artist_state, max_albums_per_artist, max_tracks_per_artist):
+                    caps_dropped += 1
+                    continue
+                if caps_enabled:
+                    _apply_caps_to_track(candidate[1], artist_state)
+                core.append(candidate)
+        else:
+            # Deterministic: take the top core_count tracks by score, honoring caps.
+            for entry in scored_tracks[:core_count]:
+                if caps_enabled and not _track_passes_caps(entry[1], artist_state, max_albums_per_artist, max_tracks_per_artist):
+                    caps_dropped += 1
+                    continue
+                if caps_enabled:
+                    _apply_caps_to_track(entry[1], artist_state)
+                core.append(entry)
+
+    core_ids = {id(track) for _, track in core}
+
+    # Exploration walk over the FULL list, honoring caps. Diversified mode starts at a random
+    # offset; deterministic mode continues from where the core slice ended (no re-scan).
+    start_offset = 0
+    if threshold_count > len(core) and len(scored_tracks) > 0:
+        if diversified:
+            start_offset = rng.randint(0, len(scored_tracks) - 1)
+        else:
+            start_offset = min(core_count, len(scored_tracks) - 1)
+
+    explore: List[Tuple[float, Dict]] = []
+    exhausted = False
+    n = len(scored_tracks)
+    if threshold_count > len(core) and n > 0:
+        i = 0
+        # Walk at most one full loop over the entire source; caps may skip many tracks, so
+        # the loop continues until threshold is met or the whole list has been scanned.
+        while len(explore) + len(core) < threshold_count and i < n:
+            idx = (start_offset + i) % n
+            i += 1
+            score, track = scored_tracks[idx]
+            if id(track) in core_ids:
+                continue
+            if caps_enabled and not _track_passes_caps(track, artist_state, max_albums_per_artist, max_tracks_per_artist):
+                caps_dropped += 1
+                continue
+            if caps_enabled:
+                _apply_caps_to_track(track, artist_state)
+            explore.append((score, track))
+        exhausted = (len(explore) + len(core)) < threshold_count
+
+    selected = core + explore
+
+    selection_meta = {
+        'core_count': len(core),
+        'explore_count': len(explore),
+        'high_tier_size': high_tier_size,
+        'start_offset': start_offset,
+        'caps_dropped': caps_dropped,
+        'exhausted': exhausted,
+        'core_fraction': core_fraction,
+        'diversified': diversified,
+    }
+
+    return selected, selection_meta
 
 
 def filter_tracks_for_this_is_playlist(
@@ -330,7 +557,11 @@ def filter_tracks_for_this_is_playlist(
     library_stats: Dict,
     playlist_type: str = "artist",
     diversity_config: Optional[Dict] = None,
-    ollama_max_tracks: Optional[int] = None
+    ollama_max_tracks: Optional[int] = None,
+    exploration_ratio: float = 0.0,
+    high_tier_ratio: float = 0.4,
+    high_tier_multiplier: float = 3.0,
+    random_seed: Optional[int] = None
 ) -> Tuple[List[Dict], Dict[str, Any]]:
     """
     Filter source tracks for "This Is" / "Genre Mix" playlists using engagement scoring.
@@ -349,6 +580,15 @@ def filter_tracks_for_this_is_playlist(
             (used only when playlist_type == "genre")
         ollama_max_tracks: Optional absolute maximum track count for Ollama provider.
             When provided, this value overrides the calculated threshold entirely.
+        exploration_ratio: Fraction of the kept set filled by the randomized exploration
+            band. When > 0, selection is diversified across runs (see `select_diverse_tracks`).
+            Ignored when `high_tier_ratio` is explicitly provided. Default 0.0 = current
+            deterministic top-N behavior (backward compatible).
+        high_tier_ratio: Fraction of the kept set that forms the randomized high-scored core.
+            Default 0.4. Only used when `exploration_ratio > 0` (or when explicitly set).
+        high_tier_multiplier: Size of the high-tier candidate pool as a multiple of the core
+            count. Default 3.0.
+        random_seed: Optional seed for reproducible runs (None = fresh variety each call).
         
     Returns:
         tuple: (filtered_tracks, filter_metadata)
@@ -382,18 +622,45 @@ def filter_tracks_for_this_is_playlist(
     # Initialize for metadata (used in both branches)
     max_albums = 0
     max_tracks = 0
-    
+    selection_meta: Dict[str, Any] = {}
+    use_diverse_selection = exploration_ratio > 0
+
     if apply_diversity:
+        # Genre: both diversified and deterministic genre paths use the single cap-aware
+        # selection function. It enforces per-artist caps DURING the walk over the full
+        # source so the selection reaches threshold_count (caps drop but we keep scanning
+        # past capped artists instead of stopping with a depleted pool). With
+        # exploration_ratio <= 0 it reproduces the original deterministic top-N behavior.
+        rng = random.Random(random_seed)
         max_albums = int(diversity_config['max_albums_per_artist'])
         max_tracks = int(diversity_config['max_tracks_per_artist'])
-        filtered_tracks, diversity_dropped = apply_artist_diversity_caps(
+        selected, selection_meta = select_diverse_tracks_with_caps(
             scored_tracks=scored_tracks,
+            threshold_count=threshold_count,
+            exploration_ratio=exploration_ratio,
+            high_tier_ratio=high_tier_ratio,
+            high_tier_multiplier=high_tier_multiplier,
             max_albums_per_artist=max_albums,
             max_tracks_per_artist=max_tracks,
-            keep_limit=threshold_count
+            rng=rng
         )
+        filtered_tracks = [track for score, track in selected]
+        diversity_dropped = selection_meta.get('caps_dropped', 0)
+    elif use_diverse_selection:
+        # Artist ("This Is"): diversified, partially-randomized selection (no caps).
+        rng = random.Random(random_seed)
+        selected, selection_meta = select_diverse_tracks(
+            scored_tracks=scored_tracks,
+            threshold_count=threshold_count,
+            exploration_ratio=exploration_ratio,
+            high_tier_ratio=high_tier_ratio,
+            high_tier_multiplier=high_tier_multiplier,
+            rng=rng
+        )
+        filtered_tracks = [track for score, track in selected]
+        diversity_dropped = 0
     else:
-        # Take top N scored tracks
+        # Take top N scored tracks (default deterministic behavior, no caps)
         filtered_tracks = [track for score, track in scored_tracks[:threshold_count]]
         diversity_dropped = 0
     
@@ -405,10 +672,34 @@ def filter_tracks_for_this_is_playlist(
         print(f"   🎯 Threshold: {threshold_count} tracks (target: {target_playlist_size} × {threshold_multiplier}x multiplier)")
     print(f"   ✂️  Filtered {len(source_tracks)} → {len(filtered_tracks)} tracks for LLM payload")
     print(f"   📤 Payload reduction: {((len(source_tracks) - len(filtered_tracks)) / len(source_tracks) * 100):.1f}%")
+    if use_diverse_selection:
+        print(f"   🎲 Diversified selection: core {selection_meta.get('core_count', 0)} "
+              f"(from top {selection_meta.get('high_tier_size', 0)}) + explore "
+              f"{selection_meta.get('explore_count', 0)} (offset {selection_meta.get('start_offset', 0)})"
+              f"{' [exhausted]' if selection_meta.get('exhausted') else ''}")
     if apply_diversity:
-        print(f"   🎭 Diversity caps applied: max {max_albums} albums / {max_tracks} tracks per artist (dropped {diversity_dropped} tracks)")
+        print(f"   🎭 Diversity caps applied: max {max_albums} albums / {max_tracks} tracks per artist "
+              f"(dropped {diversity_dropped} tracks"
+              f"{' during selection' if use_diverse_selection else ''})"
+              f"{' [exhausted]' if selection_meta.get('exhausted') else ''}")
     
     # Metadata for logging and user feedback
+    # Recompute score range from the actual selected tracks (selection is no longer a
+    # clean prefix of the sorted list when diversified selection is used).
+    if use_diverse_selection:
+        # Derive scores from the filtered tracks by matching against scored_tracks
+        sent_scores = [s for s, t in scored_tracks if t in filtered_tracks]
+        score_range = {
+            'highest': max(sent_scores) if sent_scores else 0,
+            'lowest': min(sent_scores) if sent_scores else 0,
+            'cutoff': 0  # not meaningful for non-prefix selection
+        }
+    else:
+        score_range = {
+            'highest': scored_tracks[0][0] if scored_tracks else 0,
+            'lowest': scored_tracks[threshold_count-1][0] if len(scored_tracks) >= threshold_count else 0,
+            'cutoff': scored_tracks[threshold_count][0] if len(scored_tracks) > threshold_count else 0
+        }
     filter_metadata = {
         'filtered': True,
         'source_count': len(source_tracks),
@@ -419,11 +710,12 @@ def filter_tracks_for_this_is_playlist(
         'max_albums_per_artist': max_albums,
         'max_tracks_per_artist': max_tracks,
         'ollama_max_tracks': ollama_max_tracks,
-        'score_range': {
-            'highest': scored_tracks[0][0] if scored_tracks else 0,
-            'lowest': scored_tracks[threshold_count-1][0] if len(scored_tracks) >= threshold_count else 0,
-            'cutoff': scored_tracks[threshold_count][0] if len(scored_tracks) > threshold_count else 0
-        }
+        'exploration_applied': use_diverse_selection,
+        'exploration_ratio': exploration_ratio,
+        'high_tier_ratio': high_tier_ratio,
+        'high_tier_multiplier': high_tier_multiplier,
+        'selection_meta': selection_meta,
+        'score_range': score_range
     }
     
     return filtered_tracks, filter_metadata
