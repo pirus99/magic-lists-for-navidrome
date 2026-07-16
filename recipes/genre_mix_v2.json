@@ -10,8 +10,6 @@
     "temperature": 0.6
   },
   "source_filtering": {
-    "max_albums_per_artist": 2,
-    "max_tracks_per_artist": 3,
     "exploration_ratio": 0.6,
     "high_tier_ratio": 0.4,
     "high_tier_multiplier": 3.0
