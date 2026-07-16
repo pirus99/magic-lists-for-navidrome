@@ -553,12 +553,15 @@ async def create_genre_playlist(
         # NEW: Apply smart filtering for "Genre Mix" playlists to optimize LLM payload
         library_stats = await nav_client.get_library_stats()
 
-        # Load per-artist diversity caps from the genre_mix recipe (configurable)
+        # Load diversity config (exploration ratios etc.) from the genre_mix recipe.
+        # Per-album / per-artist caps now come from the frontend request, with these
+        # backend defaults applied when the client does not send them.
         genre_recipe = recipe_manager.get_recipe("genre_mix")
-        diversity_config = genre_recipe.get("source_filtering", {
-            "max_albums_per_artist": 2,
-            "max_tracks_per_artist": 12
-        })
+        diversity_config = genre_recipe.get("source_filtering", {})
+        DEFAULT_MAX_TRACKS_PER_ALBUM = 2
+        DEFAULT_MAX_TRACKS_PER_ARTIST = 3
+        max_tracks_per_album = request.max_tracks_per_album if request.max_tracks_per_album is not None else DEFAULT_MAX_TRACKS_PER_ALBUM
+        max_tracks_per_artist = request.max_tracks_per_artist if request.max_tracks_per_artist is not None else DEFAULT_MAX_TRACKS_PER_ARTIST
 
         # Check if Ollama provider is being used and get max tracks override
         ollama_max_tracks = None
@@ -580,7 +583,11 @@ async def create_genre_playlist(
             year_end=request.year_end,
             blacklisted_artists=request.blacklisted_artists,
             min_bitrate=request.min_bitrate,
-            min_format=request.min_format
+            min_format=request.min_format,
+            min_bit_depth=request.min_bit_depth,
+            # Diversity caps (0 disables that cap)
+            max_tracks_per_album=max_tracks_per_album,
+            max_tracks_per_artist=max_tracks_per_artist
         )
 
         # Log filtering results for analytics/debugging
@@ -591,7 +598,7 @@ async def create_genre_playlist(
                 scheduler_logger.info(f"🎯 Smart filtering applied: {filter_metadata['source_count']} → {filter_metadata['pre_filtered_count']} (pre-filter) → {filter_metadata['sent_count']} tracks (multiplier: {filter_metadata['threshold_multiplier']}x)")
             scheduler_logger.info(f"📊 Score range: {filter_metadata['score_range']['highest']:.1f} - {filter_metadata['score_range']['lowest']:.1f} (cutoff: {filter_metadata['score_range']['cutoff']:.1f})")
             if filter_metadata.get('diversity_applied'):
-                scheduler_logger.info(f"🎭 Diversity caps applied: max {filter_metadata['max_albums_per_artist']} albums / {filter_metadata['max_tracks_per_artist']} tracks per artist (dropped {filter_metadata['diversity_dropped']} tracks)")
+                scheduler_logger.info(f"🎭 Diversity caps applied: max {filter_metadata['max_tracks_per_album']} tracks per album / {filter_metadata['max_tracks_per_artist']} tracks per artist (dropped {filter_metadata['diversity_dropped']} tracks)")
             # Log pre-filter stats
             pre_stats = filter_metadata.get('pre_filter_stats', {})
             if any(pre_stats.values()):

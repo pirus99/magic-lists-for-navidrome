@@ -362,22 +362,26 @@ def select_diverse_tracks(
 def _track_passes_caps(
     track: Dict,
     artist_state: Dict[str, Dict[str, Any]],
-    max_albums_per_artist: int,
+    album_state: Dict[str, int],
+    max_tracks_per_album: int,
     max_tracks_per_artist: int
 ) -> bool:
     """
-    Check whether a track passes the per-artist diversity caps given current state.
+    Check whether a track passes the diversity caps given current state.
 
-    Mirrors the cap logic in `apply_artist_diversity_caps`: a track is kept only if none of
-    its (possibly multiple, featured) artists has yet exceeded the track cap, and either the
-    album was already seen for every involved artist or no involved artist has yet reached the
-    album cap. Featured artists are treated as a union.
+    Two independent caps, each disabled when its value is 0:
+    - per-artist track cap: no involved artist may already have >= max_tracks_per_artist tracks
+    - per-album track cap: the track's album may not already have >= max_tracks_per_album tracks
+      (counted globally across all artists)
+
+    Featured artists are treated as a union for the per-artist cap.
 
     Args:
         track: The track dict to test
         artist_state: Per-artist state dict (artist -> {"track_count": int, "albums": set})
-        max_albums_per_artist: Maximum distinct albums allowed per artist
-        max_tracks_per_artist: Maximum total tracks allowed per artist
+        album_state: Per-album track-count dict (album -> int)
+        max_tracks_per_album: Maximum tracks allowed from the same album (0 disables)
+        max_tracks_per_artist: Maximum total tracks allowed per artist (0 disables)
 
     Returns:
         bool: True if the track may be kept without violating any cap
@@ -397,13 +401,12 @@ def _track_passes_caps(
             artist_state[a] = st
         states.append(st)
 
-    # Blocked if ANY involved artist already hit the track cap
-    if any(st['track_count'] >= max_tracks_per_artist for st in states):
+    # Blocked if ANY involved artist already hit the per-artist track cap (disabled when 0)
+    if max_tracks_per_artist > 0 and any(st['track_count'] >= max_tracks_per_artist for st in states):
         return False
 
-    album_seen_by_all = all(album in st['albums'] for st in states)
-    # Blocked if this is a new album AND every involved artist already hit the album cap
-    if not album_seen_by_all and all(len(st['albums']) >= max_albums_per_artist for st in states):
+    # Blocked if this album already hit the per-album track cap (disabled when 0)
+    if max_tracks_per_album > 0 and album and album_state.get(album, 0) >= max_tracks_per_album:
         return False
 
     return True
@@ -411,10 +414,11 @@ def _track_passes_caps(
 
 def _apply_caps_to_track(
     track: Dict,
-    artist_state: Dict[str, Dict[str, Any]]
+    artist_state: Dict[str, Dict[str, Any]],
+    album_state: Dict[str, int]
 ) -> None:
     """
-    Update per-artist state to count a kept track against every involved artist.
+    Update per-artist and per-album state to count a kept track.
 
     Must only be called after `_track_passes_caps` returned True for the same track/state.
     """
@@ -429,6 +433,7 @@ def _apply_caps_to_track(
     if album:
         for st in states:
             st['albums'].add(album)
+        album_state[album] = album_state.get(album, 0) + 1
     for st in states:
         st['track_count'] += 1
 
@@ -439,7 +444,7 @@ def select_diverse_tracks_with_caps(
     exploration_ratio: float = 0.0,
     high_tier_ratio: float = 0.4,
     high_tier_multiplier: float = 3.0,
-    max_albums_per_artist: int = 0,
+    max_tracks_per_album: int = 0,
     max_tracks_per_artist: int = 0,
     rng: Optional[random.Random] = None
 ) -> Tuple[List[Tuple[float, Dict]], Dict[str, Any]]:
@@ -469,7 +474,7 @@ def select_diverse_tracks_with_caps(
             mode only).
         high_tier_multiplier: Size of the high-tier candidate pool as a multiple of the core
             count (pool = top `core_count * high_tier_multiplier` tracks). Diversified mode only.
-        max_albums_per_artist: Maximum distinct albums allowed per artist (0 disables).
+        max_tracks_per_album: Maximum tracks allowed from the same album (0 disables).
         max_tracks_per_artist: Maximum total tracks allowed per artist (0 disables).
         rng: Optional `random.Random` instance for reproducible runs (None = fresh variety).
 
@@ -481,7 +486,7 @@ def select_diverse_tracks_with_caps(
     if rng is None:
         rng = random.Random()
 
-    caps_enabled = max_albums_per_artist > 0 and max_tracks_per_artist > 0
+    caps_enabled = max_tracks_per_album > 0 or max_tracks_per_artist > 0
     diversified = exploration_ratio > 0
 
     # Core fraction: diversified uses high_tier_ratio; deterministic takes the whole set
@@ -493,6 +498,7 @@ def select_diverse_tracks_with_caps(
     high_tier_size = min(high_tier_size, len(scored_tracks))
 
     artist_state: Dict[str, Dict[str, Any]] = {}
+    album_state: Dict[str, int] = {}
     core: List[Tuple[float, Dict]] = []
     caps_dropped = 0
 
@@ -510,21 +516,21 @@ def select_diverse_tracks_with_caps(
                 # rng.choice can repeat; never pick the same track into the core twice
                 if id(candidate[1]) in picked_core_ids:
                     continue
-                if caps_enabled and not _track_passes_caps(candidate[1], artist_state, max_albums_per_artist, max_tracks_per_artist):
+                if caps_enabled and not _track_passes_caps(candidate[1], artist_state, album_state, max_tracks_per_album, max_tracks_per_artist):
                     caps_dropped += 1
                     continue
                 if caps_enabled:
-                    _apply_caps_to_track(candidate[1], artist_state)
+                    _apply_caps_to_track(candidate[1], artist_state, album_state)
                 picked_core_ids.add(id(candidate[1]))
                 core.append(candidate)
         else:
             # Deterministic: take the top core_count tracks by score, honoring caps.
             for entry in scored_tracks[:core_count]:
-                if caps_enabled and not _track_passes_caps(entry[1], artist_state, max_albums_per_artist, max_tracks_per_artist):
+                if caps_enabled and not _track_passes_caps(entry[1], artist_state, album_state, max_tracks_per_album, max_tracks_per_artist):
                     caps_dropped += 1
                     continue
                 if caps_enabled:
-                    _apply_caps_to_track(entry[1], artist_state)
+                    _apply_caps_to_track(entry[1], artist_state, album_state)
                 core.append(entry)
 
     core_ids = {id(track) for _, track in core}
@@ -551,11 +557,11 @@ def select_diverse_tracks_with_caps(
             score, track = scored_tracks[idx]
             if id(track) in core_ids:
                 continue
-            if caps_enabled and not _track_passes_caps(track, artist_state, max_albums_per_artist, max_tracks_per_artist):
+            if caps_enabled and not _track_passes_caps(track, artist_state, album_state, max_tracks_per_album, max_tracks_per_artist):
                 caps_dropped += 1
                 continue
             if caps_enabled:
-                _apply_caps_to_track(track, artist_state)
+                _apply_caps_to_track(track, artist_state, album_state)
             explore.append((score, track))
         exhausted = (len(explore) + len(core)) < threshold_count
 
@@ -591,12 +597,16 @@ def filter_tracks_for_this_is_playlist(
     year_end: Optional[int] = None,
     blacklisted_artists: Optional[List[str]] = None,
     min_bitrate: Optional[int] = None,
-    min_format: Optional[str] = None
+    min_format: Optional[str] = None,
+    min_bit_depth: Optional[int] = None,
+    # Diversity caps (0 disables that cap; None falls back to diversity_config)
+    max_tracks_per_album: Optional[int] = None,
+    max_tracks_per_artist: Optional[int] = None
 ) -> Tuple[List[Dict], Dict[str, Any]]:
     """
     Filter source tracks for "This Is" / "Genre Mix" playlists using engagement scoring.
     
-    For genre playlists, per-artist diversity caps (max albums and max tracks per artist)
+    For genre playlists, diversity caps (max tracks per album and max tracks per artist)
     are applied on top of the score-based filtering to ensure track diversity in the
     payload sent to the AI model. Artist ("This Is") playlists keep the original
     score-based filtering unchanged.
@@ -606,8 +616,8 @@ def filter_tracks_for_this_is_playlist(
         target_playlist_size: Desired final playlist length
         library_stats: User's library statistics for normalization
         playlist_type: "artist" or "genre" - controls diversity cap application
-        diversity_config: Dict with max_albums_per_artist and max_tracks_per_artist
-            (used only when playlist_type == "genre")
+        diversity_config: Dict with max_tracks_per_album and max_tracks_per_artist
+            (used only when playlist_type == "genre" and explicit caps are not passed)
         ollama_max_tracks: Optional absolute maximum track count for Ollama provider.
             When provided, this value overrides the calculated threshold entirely.
         exploration_ratio: Fraction of the kept set filled by the randomized exploration
@@ -622,8 +632,12 @@ def filter_tracks_for_this_is_playlist(
         year_start: Optional minimum release year filter (1950-2026).
         year_end: Optional maximum release year filter (1950-2026).
         blacklisted_artists: Optional list of artist names to exclude.
-        min_bitrate: Optional minimum bitrate in kbps (128, 192, 256, 320).
+        min_bitrate: Optional minimum bitrate in kbps (128, 192, 256, 320). Used in MP3/Any mode.
         min_format: Optional minimum format (mp3, flac, aac, etc.).
+        min_bit_depth: Optional minimum FLAC bit depth (16, 24). FLAC-only filter: when set,
+            only FLAC tracks with bit_depth >= min_bit_depth are kept (unknown depth included
+            conservatively), all lossy formats are dropped, and other lossless formats are
+            excluded. Ignored unless min_format == "flac".
         
     Returns:
         tuple: (filtered_tracks, filter_metadata)
@@ -673,21 +687,38 @@ def filter_tracks_for_this_is_playlist(
         # Quality filter (minimum quality: keep anything at or above the threshold)
         track_bitrate = track.get('bit_rate', 0) or 0
         track_format = track.get('format', '').lower() or ''
+        track_bit_depth = track.get('bit_depth')
         min_format_lower = min_format.lower() if min_format else None
 
-        # A track fails the minimum-quality filter only if it is below the format floor
-        # AND below the bitrate floor. Lossless formats always satisfy any minimum.
         track_tier = _format_tier(track_format)
         is_lossless = track_tier >= 100
 
         quality_failed = False
-        if not is_lossless:
-            if min_format_lower is not None and track_format:
-                min_tier = _format_tier(min_format_lower)
-                if track_tier < min_tier:
-                    quality_failed = True
-            if min_bitrate is not None and track_bitrate > 0 and track_bitrate < min_bitrate:
+        if min_format_lower == 'flac':
+            # FLAC mode: bit depth is a FLAC-only filter.
+            if not is_lossless:
+                # Drop all lossy formats (mp3, aac, opus, ogg, m4a, wma, ...).
                 quality_failed = True
+            elif track_format == 'flac':
+                # FLAC track: enforce the selected bit depth (unknown depth kept conservatively).
+                if min_bit_depth is not None and track_bit_depth is not None and track_bit_depth < min_bit_depth:
+                    quality_failed = True
+            else:
+                # Other lossless (alac, wav, aiff, dsf, ...): only kept when no specific
+                # bit depth is requested (i.e. "Any" bit depth). A specific depth restricts
+                # the result to FLAC only.
+                if min_bit_depth is not None:
+                    quality_failed = True
+            # min_bitrate is ignored in FLAC mode.
+        else:
+            # MP3 / Any mode: keep lossless always; filter lossy by format tier + bitrate floor.
+            if not is_lossless:
+                if min_format_lower is not None and track_format:
+                    min_tier = _format_tier(min_format_lower)
+                    if track_tier < min_tier:
+                        quality_failed = True
+                if min_bitrate is not None and track_bitrate > 0 and track_bitrate < min_bitrate:
+                    quality_failed = True
 
         if quality_failed:
             filter_stats['quality_filtered'] += 1
@@ -703,17 +734,22 @@ def filter_tracks_for_this_is_playlist(
         print(f"   🎧 Quality filter: {filter_stats['quality_filtered']} tracks excluded")
         print(f"   📊 Remaining: {len(pre_filtered_tracks)} tracks (from {len(source_tracks)})")
     
-    # Determine whether per-artist diversity caps should be applied (genre playlists only).
-    # Caps are applied EVERY time for genre playlists, not just when score-based filtering
-    # is also active, so the payload sent to the LLM stays diverse even for small sources.
+    # Determine whether per-artist/per-album diversity caps should be applied (genre playlists only).
+    # Explicit caps from the request take precedence; otherwise fall back to diversity_config.
+    # Each cap is independent: a 0 value disables only that cap. Caps are applied EVERY time
+    # for genre playlists, not just when score-based filtering is also active, so the payload
+    # sent to the LLM stays diverse even for small sources.
+    if max_tracks_per_album is None:
+        max_tracks_per_album = int(diversity_config.get('max_tracks_per_album', 0)) if diversity_config else 0
+    if max_tracks_per_artist is None:
+        max_tracks_per_artist = int(diversity_config.get('max_tracks_per_artist', 0)) if diversity_config else 0
+
     apply_diversity = (
         playlist_type == "genre"
-        and diversity_config is not None
-        and diversity_config.get('max_albums_per_artist', 0) > 0
-        and diversity_config.get('max_tracks_per_artist', 0) > 0
+        and (max_tracks_per_album > 0 or max_tracks_per_artist > 0)
     )
-    max_albums = int(diversity_config['max_albums_per_artist']) if apply_diversity else 0
-    max_tracks = int(diversity_config['max_tracks_per_artist']) if apply_diversity else 0
+    max_albums = max_tracks_per_album if apply_diversity else 0
+    max_tracks = max_tracks_per_artist if apply_diversity else 0
 
     # Only filter (score-based truncation) if source tracks exceed threshold
     if len(pre_filtered_tracks) <= threshold_count:
@@ -728,7 +764,7 @@ def filter_tracks_for_this_is_playlist(
                 exploration_ratio=exploration_ratio,
                 high_tier_ratio=high_tier_ratio,
                 high_tier_multiplier=high_tier_multiplier,
-                max_albums_per_artist=max_albums,
+                max_tracks_per_album=max_albums,
                 max_tracks_per_artist=max_tracks,
                 rng=rng
             )
@@ -736,7 +772,7 @@ def filter_tracks_for_this_is_playlist(
             diversity_dropped = selection_meta.get('caps_dropped', 0)
             print(f"🎭 DIVERSITY CAPS (below threshold): kept {len(capped_tracks)} of "
                   f"{len(pre_filtered_tracks)} tracks (dropped {diversity_dropped}, "
-                  f"max {max_albums} albums / {max_tracks} tracks per artist)")
+                  f"max {max_albums} tracks per album / {max_tracks} tracks per artist)")
             return capped_tracks, {
                 'filtered': False,
                 'reason': 'below_threshold_diversity_applied',
@@ -744,7 +780,7 @@ def filter_tracks_for_this_is_playlist(
                 'sent_count': len(capped_tracks),
                 'diversity_applied': True,
                 'diversity_dropped': diversity_dropped,
-                'max_albums_per_artist': max_albums,
+                'max_tracks_per_album': max_albums,
                 'max_tracks_per_artist': max_tracks,
                 'pre_filter_stats': filter_stats
             }
@@ -777,7 +813,7 @@ def filter_tracks_for_this_is_playlist(
             exploration_ratio=exploration_ratio,
             high_tier_ratio=high_tier_ratio,
             high_tier_multiplier=high_tier_multiplier,
-            max_albums_per_artist=max_albums,
+            max_tracks_per_album=max_albums,
             max_tracks_per_artist=max_tracks,
             rng=rng
         )
@@ -815,7 +851,7 @@ def filter_tracks_for_this_is_playlist(
               f"{selection_meta.get('explore_count', 0)} (offset {selection_meta.get('start_offset', 0)})"
               f"{' [exhausted]' if selection_meta.get('exhausted') else ''}")
     if apply_diversity:
-        print(f"   🎭 Diversity caps applied: max {max_albums} albums / {max_tracks} tracks per artist "
+        print(f"   🎭 Diversity caps applied: max {max_albums} tracks per album / {max_tracks} tracks per artist "
               f"(dropped {diversity_dropped} tracks"
               f"{' during selection' if use_diverse_selection else ''})"
               f"{' [exhausted]' if selection_meta.get('exhausted') else ''}")
@@ -845,7 +881,7 @@ def filter_tracks_for_this_is_playlist(
         'threshold_multiplier': threshold_multiplier,
         'diversity_applied': apply_diversity,
         'diversity_dropped': diversity_dropped,
-        'max_albums_per_artist': max_albums,
+        'max_tracks_per_album': max_albums,
         'max_tracks_per_artist': max_tracks,
         'ollama_max_tracks': ollama_max_tracks,
         'exploration_applied': use_diverse_selection,

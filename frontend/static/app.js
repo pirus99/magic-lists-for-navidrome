@@ -457,10 +457,54 @@ async function loadGenres() {
             // Setup genre selection change handler
             genreSelect.addEventListener('change', handleGenreSelection);
 
+            // Setup fetch artists button click handler
+            const fetchArtistsBtn = document.getElementById('genre-fetch-artists-btn');
+            if (fetchArtistsBtn) {
+                fetchArtistsBtn.addEventListener('click', () => {
+                    loadBlacklistArtists(true);
+                });
+            }
+
+            // Setup artist/album diversity caps toggle
+            const capsToggle = document.getElementById('genre-caps-enabled');
+            const capsInputs = document.getElementById('genre-caps-inputs');
+            if (capsToggle && capsInputs) {
+                const syncCapsInputs = () => {
+                    const disabled = !capsToggle.checked;
+                    capsInputs.querySelectorAll('input').forEach(input => { input.disabled = disabled; });
+                    capsInputs.style.opacity = disabled ? '0.5' : '1';
+                };
+                capsToggle.addEventListener('change', syncCapsInputs);
+                syncCapsInputs();
+            }
+
+            // Setup format -> bitrate/bit-depth toggle for the Minimum Quality filter.
+            // FLAC shows the bit-depth select; MP3/Any shows the bitrate select.
+            const formatSelect = document.getElementById('genre-min-format');
+            const bitrateWrap = document.getElementById('genre-bitrate-wrap');
+            const bitdepthWrap = document.getElementById('genre-bitdepth-wrap');
+            const bitrateSelect = document.getElementById('genre-min-bitrate');
+            const bitdepthSelect = document.getElementById('genre-min-bitdepth');
+            if (formatSelect && bitrateWrap && bitdepthWrap) {
+                const syncQualityInputs = () => {
+                    const isFlac = formatSelect.value === 'flac';
+                    bitrateWrap.classList.toggle('hidden', isFlac);
+                    bitdepthWrap.classList.toggle('hidden', !isFlac);
+                    if (bitrateSelect) bitrateSelect.disabled = isFlac;
+                    if (bitdepthSelect) bitdepthSelect.disabled = !isFlac;
+                };
+                formatSelect.addEventListener('change', syncQualityInputs);
+                syncQualityInputs();
+            }
+
             // Reinitialize the HSSelect component
             if (window.HSSelect) {
                 window.HSSelect.autoInit();
             }
+
+            // Show the default placeholder in the blacklist dropdown (before artists are loaded).
+            // Must run after HSSelect autoInit so the dropdown panel exists.
+            showBlacklistPlaceholder();
         }
     } catch (error) {
         console.error('Error loading genres:', error);
@@ -472,21 +516,63 @@ async function loadGenres() {
 function handleGenreSelection(e) {
     const selectedOptions = Array.from(e.target.selectedOptions).map(option => option.value);
     selectedGenres = selectedOptions;
+    // Reset blacklist artists and show placeholder whenever genre selection changes
+    blacklistArtistsLoaded = false;
+    showBlacklistPlaceholder();
     const submitBtn = document.getElementById('create-genre-playlist-btn');
 
     if (selectedGenres.length > 0) {
         submitBtn.disabled = false;
-        // Load blacklist artists when genres are selected
-        loadBlacklistArtists();
     } else {
         submitBtn.disabled = true;
     }
 }
 
+// Show the placeholder message inside the blacklist dropdown when artists aren't loaded yet.
+// This is the default state (shown before any genres are selected) and reappears
+// whenever the genre selection changes, until artists are successfully fetched.
+//
+// NOTE: HSSelect skips disabled <option> elements, so we inject the message as a
+// standalone element directly into the HSSelect dropdown panel instead of as an option.
+const BLACKLIST_PLACEHOLDER_ID = 'genre-blacklist-placeholder';
+function showBlacklistPlaceholder() {
+    const blacklistSelect = document.getElementById('genre-blacklist-select');
+    if (!blacklistSelect) return;
+
+    // Remove any previously injected placeholder first
+    removeBlacklistPlaceholder();
+
+    // Locate the HSSelect dropdown panel
+    let panel = null;
+    if (window.HSSelect) {
+        const selectInstance = window.HSSelect.getInstance(blacklistSelect);
+        panel = selectInstance ? selectInstance.dropdown : null;
+    }
+    if (!panel) return;
+
+    // Inject the placeholder element at the bottom of the panel (after the search box)
+    const placeholder = document.createElement('div');
+    placeholder.id = BLACKLIST_PLACEHOLDER_ID;
+    placeholder.className = 'px-4 py-3 text-sm text-gray-400 italic';
+    placeholder.textContent = 'Click Refresh to load Artists for selected Genres';
+    panel.appendChild(placeholder);
+}
+
+function removeBlacklistPlaceholder() {
+    const existing = document.getElementById(BLACKLIST_PLACEHOLDER_ID);
+    if (existing) existing.remove();
+}
+
 // Load artists for blacklist dropdown (filtered by selected genres)
 let blacklistArtistsLoaded = false;
-async function loadBlacklistArtists() {
-    if (blacklistArtistsLoaded) return;
+async function loadBlacklistArtists(force = false) {
+    if (blacklistArtistsLoaded && !force) return;
+    
+    // Show loading spinner, hide fetch button
+    const fetchBtn = document.getElementById('genre-fetch-artists-btn');
+    const fetchSpinner = document.getElementById('genre-fetch-artists-spinner');
+    if (fetchBtn) fetchBtn.classList.add('hidden');
+    if (fetchSpinner) fetchSpinner.classList.remove('hidden');
     
     try {
         if (selectedGenres.length === 0) {
@@ -494,7 +580,7 @@ async function loadBlacklistArtists() {
             return;
         }
 
-        let url = `/api/artists-by-genre?genres=${encodeURIComponent(selectedGenres.join(','))}`;
+        let url = `/api/artists-by-genre?${selectedGenres.map(g => `genres=${encodeURIComponent(g)}`).join('&')}`;
         if (selectedLibraryIds.length > 0) {
             const libraryIdsParam = selectedLibraryIds.map(id => `library_id=${encodeURIComponent(id)}`).join('&');
             url += `&${libraryIdsParam}`;
@@ -507,10 +593,13 @@ async function loadBlacklistArtists() {
 
         const blacklistSelect = document.getElementById('genre-blacklist-select');
         if (blacklistSelect) {
-            // Clear existing options except the first one
-            while (blacklistSelect.options.length > 1) {
-                blacklistSelect.remove(1);
+            // Clear all existing options (including any placeholder)
+            while (blacklistSelect.options.length > 0) {
+                blacklistSelect.remove(0);
             }
+
+            // Remove the injected placeholder message
+            removeBlacklistPlaceholder();
 
             // Add artist options
             artists.forEach(artist => {
@@ -534,6 +623,10 @@ async function loadBlacklistArtists() {
     } catch (error) {
         console.error('Error loading blacklist artists:', error);
         showToast('error', 'Failed to load artists for blacklist');
+    } finally {
+        // Hide loading spinner, show fetch button
+        if (fetchBtn) fetchBtn.classList.remove('hidden');
+        if (fetchSpinner) fetchSpinner.classList.add('hidden');
     }
 }
 
@@ -931,12 +1024,23 @@ async function createGenrePlaylist() {
         // Get filter values
         const yearStart = document.getElementById('genre-year-start').value;
         const yearEnd = document.getElementById('genre-year-end').value;
-        const minBitrate = document.getElementById('genre-min-bitrate').value;
         const minFormat = document.getElementById('genre-min-format').value;
+        // FLAC mode uses bit depth; MP3/Any mode uses bitrate. The hidden select is disabled
+        // so its (stale) value is ignored.
+        const isFlac = minFormat === 'flac';
+        const minBitrateRaw = document.getElementById('genre-min-bitrate').value;
+        const minBitDepthRaw = document.getElementById('genre-min-bitdepth').value;
+        const minBitrate = isFlac ? null : (minBitrateRaw ? parseInt(minBitrateRaw) : null);
+        const minBitDepth = isFlac ? (minBitDepthRaw ? parseInt(minBitDepthRaw) : null) : null;
         
         // Get blacklisted artists from multi-select
         const blacklistSelect = document.getElementById('genre-blacklist-select');
         const blacklistedArtists = blacklistSelect ? Array.from(blacklistSelect.selectedOptions).map(opt => opt.value) : [];
+
+        // Diversity caps (artist & album). When the checkbox is off, send 0 to disable both.
+        const capsEnabled = document.getElementById('genre-caps-enabled').checked;
+        const maxTracksPerAlbum = capsEnabled ? parseInt(document.getElementById('genre-max-tracks-per-album').value) || 0 : 0;
+        const maxTracksPerArtist = capsEnabled ? parseInt(document.getElementById('genre-max-tracks-per-artist').value) || 0 : 0;
 
         const response = await fetch('/api/create_genre_playlist', {
             method: 'POST',
@@ -952,8 +1056,12 @@ async function createGenrePlaylist() {
                 year_start: yearStart ? parseInt(yearStart) : null,
                 year_end: yearEnd ? parseInt(yearEnd) : null,
                 blacklisted_artists: blacklistedArtists,
-                min_bitrate: minBitrate ? parseInt(minBitrate) : null,
-                min_format: minFormat || null
+                min_bitrate: minBitrate,
+                min_format: minFormat || null,
+                min_bit_depth: minBitDepth,
+                // Diversity caps (0 disables that cap)
+                max_tracks_per_album: maxTracksPerAlbum,
+                max_tracks_per_artist: maxTracksPerArtist
             })
         });
 

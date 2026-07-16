@@ -319,6 +319,7 @@ class NavidromeClient:
                 "rating": song_data.get("userRating", 0),
                 "format": song_data.get("suffix"),
                 "bit_rate": song_data.get("bitRate", 0),
+                "bit_depth": song_data.get("bitDepth"),
                 "duration": song_data.get("duration"),
                 "track_number": song_data.get("track")
             }
@@ -404,7 +405,8 @@ class NavidromeClient:
                             "starred": song.get("starred") is not None,
                             "rating": song.get("userRating", 0),
                             "format": song.get("suffix"),
-                            "bit_rate": song.get("bitRate", 0)
+                            "bit_rate": song.get("bitRate", 0),
+                            "bit_depth": song.get("bitDepth")
                         })
             
             return self._deduplicate_tracks(tracks_list)
@@ -494,6 +496,7 @@ class NavidromeClient:
                             "rating": song.get("userRating", 0),
                             "format": song.get("suffix"),
                             "bit_rate": song.get("bitRate", 0),
+                            "bit_depth": song.get("bitDepth"),
                             "duration": song.get("duration"),
                             "track_number": song.get("track")
                         }
@@ -599,6 +602,7 @@ class NavidromeClient:
                         "rating": song.get("userRating", 0),
                         "format": song.get("suffix"),
                         "bit_rate": song.get("bitRate", 0),
+                        "bit_depth": song.get("bitDepth"),
                         "duration": song.get("duration"),
                         "track_number": song.get("track")
                     }
@@ -683,6 +687,7 @@ class NavidromeClient:
                         "rating": song.get("userRating", 0),
                         "format": song.get("suffix"),
                         "bit_rate": song.get("bitRate", 0),
+                        "bit_depth": song.get("bitDepth"),
                         "duration": song.get("duration"),
                         "track_number": song.get("track")
                     }
@@ -1062,6 +1067,7 @@ class NavidromeClient:
                     "rating": song.get("userRating", 0),
                     "format": song.get("suffix"),
                     "bit_rate": song.get("bitRate", 0),
+                    "bit_depth": song.get("bitDepth"),
                     "genres": song.get("genres", []),
                     "path": song.get("path")
                 })

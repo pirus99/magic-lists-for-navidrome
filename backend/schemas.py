@@ -30,6 +30,10 @@ class CreateGenrePlaylistRequest(BaseModel):
     blacklisted_artists: List[str] = []  # Artist names to exclude from selection
     min_bitrate: Optional[int] = None  # Minimum bitrate in kbps (128, 192, 256, 320)
     min_format: Optional[str] = None  # Minimum format (mp3, flac, aac, etc.)
+    min_bit_depth: Optional[int] = None  # Minimum FLAC bit depth (16, 24); None = any. FLAC-only filter.
+    # Diversity caps (0 or None disables that cap; defaults applied in the endpoint)
+    max_tracks_per_album: Optional[int] = None  # Max tracks from the same album (global)
+    max_tracks_per_artist: Optional[int] = None  # Max tracks per artist
 
 class Playlist(BaseModel):
     """Schema for a stored playlist"""
