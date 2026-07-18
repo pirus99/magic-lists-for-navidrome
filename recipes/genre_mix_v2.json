@@ -6,7 +6,7 @@
     "desired_track_count": "{{DESIRED_TRACK_COUNT}}"
   },
   "llm_config": {
-    "max_output_tokens": 28000,
+    "max_output_tokens": 22000,
     "temperature": 0.6
   },
   "source_filtering": {
