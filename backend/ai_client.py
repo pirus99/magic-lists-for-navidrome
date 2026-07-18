@@ -781,11 +781,7 @@ class AIClient:
 
             print(f"🤖 Using AI model: {model} (from {self.provider.provider_type} provider)")
 
-            # Serialize the complete recipe (excluding tracks_data to avoid duplication)
-            recipe_without_tracks = {k: v for k, v in final_recipe.items() if k != "tracks_data"}
-
-            # Build structured JSON payload with INDEX-BASED approach
-            # Create indexed tracks (remove complex IDs, use simple indices)
+            # Build INDEX-BASED tracks (remove complex IDs, use simple indices)
             indexed_tracks = []
 
             for index, track in enumerate(candidate_tracks):
@@ -831,54 +827,6 @@ class AIClient:
 
             # Parse the JSON response with comprehensive validation
             try:
-                # Clean up the response and extract JSON
-                cleaned_content = content.strip()
-
-                # Remove markdown code fences if present
-                if cleaned_content.startswith("```json"):
-                    cleaned_content = cleaned_content[7:]  # Remove ```json
-                if cleaned_content.startswith("```"):
-                    cleaned_content = cleaned_content[3:]   # Remove ```
-                if cleaned_content.endswith("```"):
-                    cleaned_content = cleaned_content[:-3]  # Remove trailing ```
-
-                cleaned_content = cleaned_content.strip()
-
-                # Extract JSON from mixed text/JSON response
-                import re
-
-                # Try to find JSON object first (new format): {"track_ids": [...], "description": "..."}
-                json_object_match = re.search(r'\{.*?"track_ids".*?\}', cleaned_content, re.DOTALL)
-                if json_object_match:
-                    json_str = json_object_match.group(0)
-                    print(f"🔍 Extracted JSON object: {json_str[:100]}...")
-                else:
-                    # Try to find JSON array (legacy format): [1, 2, 3, ...]
-                    json_array_match = re.search(r'\[([\d\s,]+)\]', cleaned_content, re.DOTALL)
-                    if json_array_match:
-                        json_str = json_array_match.group(0)
-                        print(f"🔍 Extracted JSON array: {json_str[:100]}...")
-                    else:
-                        # No JSON found, try to parse the whole cleaned content
-                        json_str = cleaned_content
-                        print(f"🔍 Using entire cleaned content for JSON parsing")
-
-                # Clean up the extracted JSON
-                lines = json_str.split('\n')
-                cleaned_lines = []
-
-                for line in lines:
-                    # Remove // comments but preserve URLs like http://
-                    if '//' in line and 'http://' not in line and 'https://' not in line:
-                        comment_pos = line.find('//')
-                        line = line[:comment_pos].rstrip()
-
-                    # Remove trailing commas before closing brackets
-                    line = re.sub(r',(\s*[\]}])', r'\1', line)
-
-                    if line.strip():  # Only add non-empty lines
-                        cleaned_lines.append(line)
-
                 # Parse the JSON response with the global, robust parser
                 track_ids, _description = parse_ai_track_response(content)
 
