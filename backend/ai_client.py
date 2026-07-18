@@ -285,6 +285,9 @@ class AIClient:
                 # New recipe format
                 llm_config = final_recipe.get("llm_config", {})
                 model_instructions = final_recipe.get("model_instructions", "")
+                # Dedicated description prompt (genre_mix-style separate call)
+                description_instructions = final_recipe.get("description_instructions", "")
+                description_llm_config = final_recipe.get("description_llm_config", {"temperature": 0.7, "max_output_tokens": 500})
                 
                 # Use model from environment (.env file), ignoring recipe model_name
                 model = self.model or "openai/gpt-3.5-turbo"
@@ -310,15 +313,20 @@ class AIClient:
                     # Store the actual track ID in our mapping
                     track_id_map.append(track["id"])
                     
-                    # Create indexed track (minimal essential data to reduce token usage)
-                    indexed_track = {
-                        "i": index,
-                        "t": track.get("title", "Unknown"),
-                        "r": track.get("album", "Unknown"),
-                        "y": track.get("year", 0),
-                        "p": track.get("play_count", 0),
-                        "l": track.get("local_library_likes", False)
-                    }
+                    # Compute score using the genre_mix formula
+                    track_score = round(track.get("play_count", 0)) * 1.5
+                    if track.get("local_library_likes", False):
+                        track_score += 15  # Boost score for liked tracks
+
+                    # Create indexed track as a tuple to reduce token usage
+                    # (index, "title - artist", album, year, score)
+                    indexed_track = (
+                        index,
+                        f"{track.get('title', 'Unknown')} - {track.get('artist', 'Unknown')}",
+                        track.get("album", "Unknown"),
+                        track.get("year", "Unknown"),
+                        track_score
+                    )
                     indexed_tracks.append(indexed_track)
                 
                 structured_payload = {
@@ -338,10 +346,12 @@ class AIClient:
                 candidate_tracks_str = json.dumps(indexed_tracks, separators=(',', ':'), ensure_ascii=False)
                 cleaned_tracks = clean_prompt(candidate_tracks_str)
                 
-                user_content = f"""Select up to {num_tracks} tracks for a "This Is {artist_name}" playlist. 
-                                If fewer than {num_tracks} tracks are available, select all available tracks.
-                                Tracks: {cleaned_tracks} Return JSON: {{"track_ids": [indices], "description": "summary"}}"""
-                
+                user_content = (
+                    f"Select up to {num_tracks} tracks for a 'This Is {artist_name}' playlist.\n"
+                    f"If fewer than {num_tracks} tracks are available, select all available tracks.\n"
+                    f"Tracks: {cleaned_tracks}\nReturn JSON: {{'track_ids': [indices]}}"
+                ) 
+                                  
                 payload = {
                     "model": model,
                     "messages": [
@@ -371,8 +381,6 @@ class AIClient:
                 model = self.model or llm_params.get("model_fallback", "openai/gpt-3.5-turbo")
                 temperature = llm_params.get("temperature", 0.7)
                 max_tokens = llm_params.get("max_tokens", 1000)
-                
-
                 
                 system_prompt = "You are a professional music curator. Always respond with valid JSON containing track_ids array and description string. No other text outside the JSON."
             
@@ -469,6 +477,17 @@ class AIClient:
 
                 # Final selection (limit to requested count)
                 final_selection = mapped_track_ids[:num_tracks]
+
+                # Generate the description in a separate, dedicated AI request (if requested)
+                description = ""
+                if include_description:
+                    description = await self._generate_playlist_description(
+                        description_instructions=description_instructions,
+                        selected_track_ids=final_selection[:20],
+                        candidate_tracks=shuffled_tracks,
+                        playlist_context=f"This Is {artist_name}",
+                        llm_config=description_llm_config
+                    )
 
                 if include_description:
                     return final_selection, description
@@ -991,12 +1010,11 @@ class AIClient:
                 # Generate the description in a separate AI request (if requested)
                 description = ""
                 if include_description:
-                    description_track_count = num_tracks / 5
-                    description = await self._generate_genre_description(
+                    description = await self._generate_playlist_description(
                         description_instructions=description_instructions,
-                        selected_track_ids=final_selection[:int(description_track_count)],
+                        selected_track_ids=final_selection,
                         candidate_tracks=candidate_tracks,
-                        genre_names=genre_names,
+                        playlist_context=f"Genre Mix: {genre_names}",
                         llm_config=description_llm_config
                     )
 
@@ -1064,31 +1082,31 @@ class AIClient:
         else:
             return spaced_tracks
 
-    async def _generate_genre_description(
+    async def _generate_playlist_description(
         self,
         description_instructions: str,
         selected_track_ids: List[str],
         candidate_tracks: List[Dict[str, Any]],
-        genre_names: str,
+        playlist_context: str,
         llm_config: Dict[str, Any]
     ) -> str:
-        """Generate an editorial description for an already-built Genre Mix playlist.
+        """Generate an editorial description for an already-built playlist.
 
         Uses a separate AI request (and optionally a separate model via DESCRIPTION_AI_MODEL).
         On any failure, returns a generic fallback description string so the playlist
-        can still be created.
+        can still be created. Shared by genre_mix and this_is curation.
 
         Args:
             description_instructions: System prompt for the description model
             selected_track_ids: Final ordered list of track IDs in the playlist
             candidate_tracks: Full candidate track metadata (for human-readable mapping)
-            genre_names: Comma-separated genre names for context
+            playlist_context: Human-readable playlist name/context (e.g. "Genre Mix: Rock" or "This Is Artist")
             llm_config: LLM parameters (temperature, max_output_tokens) for the description call
 
         Returns:
             Description string (fallback text on failure)
         """
-        fallback_description = f"A curated Genre Mix playlist blending the best of {genre_names}."
+        fallback_description = f"A curated playlist: {playlist_context}."
 
         if not description_instructions:
             print(f"⚠️ No description_instructions configured, using fallback description")
@@ -1110,7 +1128,7 @@ class AIClient:
         readable_list = "\n".join(readable_lines)
 
         user_content = (
-            f"The following is the final, ordered track list for a Genre Mix: {genre_names} playlist.\n"
+            f"The following is the final, ordered track list for a {playlist_context} playlist.\n"
             f"Write a short editorial description for it.\n\n"
             f"Tracks:\n{readable_list}\n"
         )
@@ -1119,7 +1137,7 @@ class AIClient:
         max_tokens = llm_config.get("max_output_tokens", 500)
 
         try:
-            print(f"📝 Generating Genre Mix description with model: {self.description_provider.model}")
+            print(f"📝 Generating playlist description with model: {self.description_provider.model}")
             content = await self.description_provider.generate(
                 system_prompt=description_instructions,
                 user_prompt=user_content,
@@ -1155,11 +1173,11 @@ class AIClient:
                 print(f"⚠️ Description AI returned empty content, using fallback description")
                 return fallback_description
 
-            print(f"✅ Genre Mix description generated (length: {len(description)} chars)")
+            print(f"✅ Playlist description generated (length: {len(description)} chars)")
             return description
 
         except Exception as e:
-            print(f"💥 Error generating Genre Mix description: {e}")
+            print(f"💥 Error generating playlist description: {e}")
             return fallback_description
 
     async def close(self):
