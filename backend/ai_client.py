@@ -254,7 +254,6 @@ class AIClient:
             # No more string conversion and text blob parsing!
             
             # Log track data completeness
-            original_track_count = len(candidate_tracks)
             shuffled_track_count = len(shuffled_tracks)
             
             print(f"🎵 Preparing {shuffled_track_count} tracks for AI curation")
@@ -296,16 +295,7 @@ class AIClient:
                 
                 print(f"🤖 Using AI model: {model} (from {self.provider.provider_type} provider)")
 
-                # Serialize the complete recipe (excluding tracks_data to avoid duplication)
-                recipe_without_tracks = {k: v for k, v in final_recipe.items() if k != "tracks_data"}
-
-                headers = {
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json"
-                }
-                
-                # Build structured JSON payload with INDEX-BASED approach
-                # Create indexed tracks (remove complex IDs, use simple indices)
+                # Build INDEX-BASED tracks (remove complex IDs, use simple indices)
                 indexed_tracks = []
                 track_id_map = []  # Keep mapping of index → actual track ID
                 
@@ -328,16 +318,6 @@ class AIClient:
                         track_score
                     )
                     indexed_tracks.append(indexed_track)
-                
-                structured_payload = {
-                    "recipe": recipe_without_tracks,
-                    "available_tracks": indexed_tracks,  # INDEX-BASED tracks (no complex IDs)
-                    "request": {
-                        "artist_name": artist_name,
-                        "desired_track_count": num_tracks,
-                        "playlist_type": "this_is"
-                     }
-                }
 
                 print(f"🔢 Using index-based approach for {len(track_id_map)} tracks")
 
@@ -351,26 +331,6 @@ class AIClient:
                     f"If fewer than {num_tracks} tracks are available, select all available tracks.\n"
                     f"Tracks: {cleaned_tracks}\nReturn JSON: {{'track_ids': [indices]}}"
                 ) 
-                                  
-                payload = {
-                    "model": model,
-                    "messages": [
-                        {
-                            "role": "system",
-                            "content": model_instructions
-                        },
-                        {
-                            "role": "user", 
-                            "content": user_content
-                        }
-                    ],
-                    "max_tokens": max_tokens,
-                    "temperature": temperature
-                }
-                
-                print(f"💬 Sending structured payload to AI")
-                
-                # DEBUG: Dump payload to file for "This Is" playlist inspection
 
             else:
                 # Legacy recipe format
@@ -381,8 +341,6 @@ class AIClient:
                 model = self.model or llm_params.get("model_fallback", "openai/gpt-3.5-turbo")
                 temperature = llm_params.get("temperature", 0.7)
                 max_tokens = llm_params.get("max_tokens", 1000)
-                
-                system_prompt = "You are a professional music curator. Always respond with valid JSON containing track_ids array and description string. No other text outside the JSON."
             
             
             # Use the provider to make the AI request
@@ -413,56 +371,8 @@ class AIClient:
 
             # Parse the JSON response with comprehensive validation
             try:
-                # Clean up the response and extract JSON
-                cleaned_content = content.strip()
-
-                # Remove markdown code fences if present
-                if cleaned_content.startswith("```json"):
-                    cleaned_content = cleaned_content[7:]  # Remove ```json
-                if cleaned_content.startswith("```"):
-                    cleaned_content = cleaned_content[3:]   # Remove ```
-                if cleaned_content.endswith("```"):
-                    cleaned_content = cleaned_content[:-3]  # Remove trailing ```
-
-                cleaned_content = cleaned_content.strip()
-
-                # Extract JSON from mixed text/JSON response
-                import re
-
-                # Try to find JSON object first (new format): {"track_ids": [...], "description": "..."}
-                json_object_match = re.search(r'\{.*?"track_ids".*?\}', cleaned_content, re.DOTALL)
-                if json_object_match:
-                    json_str = json_object_match.group(0)
-                    print(f"🔍 Extracted JSON object: {json_str[:100]}...")
-                else:
-                    # Try to find JSON array (legacy format): [1, 2, 3, ...]
-                    json_array_match = re.search(r'\[([\d\s,]+)\]', cleaned_content, re.DOTALL)
-                    if json_array_match:
-                        json_str = json_array_match.group(0)
-                        print(f"🔍 Extracted JSON array: {json_str[:100]}...")
-                    else:
-                        # No JSON found, try to parse the whole cleaned content
-                        json_str = cleaned_content
-                        print(f"🔍 Using entire cleaned content for JSON parsing")
-
-                # Clean up the extracted JSON
-                lines = json_str.split('\n')
-                cleaned_lines = []
-
-                for line in lines:
-                    # Remove // comments but preserve URLs like http://
-                    if '//' in line and 'http://' not in line and 'https://' not in line:
-                        comment_pos = line.find('//')
-                        line = line[:comment_pos].rstrip()
-
-                    # Remove trailing commas before closing brackets
-                    line = re.sub(r',(\s*[\]}])', r'\1', line)
-
-                    if line.strip():  # Only add non-empty lines
-                        cleaned_lines.append(line)
-
                 # Parse the JSON response with the global, robust parser
-                track_ids, description = parse_ai_track_response(content)
+                track_ids, _description = parse_ai_track_response(content)
 
                 print(f"✅ AI returned {len(track_ids)} tracks (requested: {num_tracks}), validation passed")
 
