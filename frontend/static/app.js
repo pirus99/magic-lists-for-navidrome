@@ -420,19 +420,19 @@ async function loadGenres() {
             }
 
             // Update the data-hs-select attribute with new placeholder
-            const newPlaceholder = `Select from ${allGenres.length} genres...`;
+            const newPlaceholder = `Search ${allGenres.length} genres...`;
             genreSelect.setAttribute('data-hs-select', JSON.stringify({
                 "placeholder": newPlaceholder,
-                "toggleTag": "<button type=\"button\"></button>",
-                "toggleClasses": "hs-select-disabled:pointer-events-none hs-select-disabled:opacity-50 relative py-3 px-4 pe-9 flex text-nowrap w-full cursor-pointer bg-white border border-gray-200 rounded-lg text-start text-sm focus:border-blue-500 focus:ring-blue-500 before:absolute before:inset-0 before:z-[1]",
-                "dropdownClasses": "hs-select-dropdown mt-2 z-50 w-full max-h-72 p-1 space-y-0.5 bg-white border border-gray-200 rounded-lg overflow-hidden overflow-y-auto [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-track]:bg-gray-100 [&::-webkit-scrollbar-thumb]:bg-gray-300",
-                "optionClasses": "py-2 px-4 w-full text-sm text-gray-800 cursor-pointer hover:bg-gray-100 rounded-lg focus:outline-none focus:bg-gray-100",
-                "optionTemplate": "<div class=\"flex justify-between items-center w-full\"><span data-title></span><span class=\"hidden hs-selected:block\"><svg class=\"flex-shrink-0 size-3.5 text-blue-600\" xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><polyline points=\"20 6 9 17 4 12\"/></svg></span></div>",
-                "hasSearch": true,
-                "searchPlaceholder": "Search...",
-                "searchClasses": "block w-full text-sm border-gray-200 rounded-lg focus:border-blue-500 focus:ring-blue-500 before:absolute before:inset-0 before:z-[1] py-2 px-3",
-                "searchWrapperClasses": "bg-white p-2 -mx-1 sticky top-0",
-                "multiple": true
+                "mode": "tags",
+                "toggleTag": "<button type=\"button\" aria-expanded=\"false\"><span class=\"capitalize text-foreground\" data-title></span></button>",
+                "toggleClasses": "hs-select-disabled:pointer-events-none hs-select-disabled:opacity-50 relative py-3 ps-4 pe-9 flex items-center gap-x-2 text-nowrap w-full cursor-pointer bg-layer border border-layer-line text-layer-foreground rounded-lg text-start text-sm hover:bg-layer-hover focus:outline-hidden focus:bg-layer-focus",
+                "wrapperClasses": "relative pe-9 min-h-11.5 flex items-center flex-wrap w-full bg-layer border border-layer-line hover:bg-layer-hover rounded-lg text-start text-sm focus:bg-layer-focus",
+                "tagsItemTemplate": "<div class=\"flex flex-nowrap items-center text-nowrap relative z-10 bg-layer border border-layer-line rounded-full p-1 m-1\"><div class=\"whitespace-nowrap capitalize text-foreground ps-1\" data-title></div><div class=\"inline-flex shrink-0 justify-between items-center size-5 ms-2 rounded-full bg-surface text-surface-foreground hover:bg-surface-hover focus:outline-hidden focus:bg-surface-focus text-sm cursor-pointer\" data-remove><svg class=\"shrink-0 size-3\" xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M18 6 6 18\"/><path d=\"m6 6 12 12\"/></svg></div></div>",
+                "tagsInputClasses": "py-3 px-4 rounded-lg order-1 bg-white border-transparent text-foreground placeholder:text-black focus:ring-0 text-sm outline-hidden",
+                "dropdownClasses": "mt-2 z-50 w-full max-h-72 p-1 space-y-0.5 bg-white border border-select-line rounded-lg shadow-xl overflow-hidden overflow-y-auto [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-thumb]:rounded-none [&::-webkit-scrollbar-track]:bg-scrollbar-track [&::-webkit-scrollbar-thumb]:bg-scrollbar-thumb",
+                "optionClasses": "py-2 px-4 w-full text-sm text-select-item-foreground cursor-pointer hover:bg-select-item-hover rounded-lg focus:outline-hidden focus:bg-select-item-focus hs-selected:bg-blue-50 hs-selected:text-blue-800",
+                "optionTemplate": "<div class=\"flex items-center\"><div class=\"text-sm capitalize text-foreground\" data-title></div><div class=\"text-xs text-muted-foreground-1\" data-description></div><div class=\"ms-auto\"><span class=\"hidden hs-selected:block\"><svg class=\"shrink-0 size-4 text-primary\" xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" fill=\"currentColor\" viewBox=\"0 0 16 16\"><path d=\"M12.736 3.97a.733.733 0 0 1 1.047 0c.286.289.29.756.01 1.05L7.88 12.01a.733.733 0 0 1-1.065.02L3.217 8.384a.757.757 0 0 1 0-1.06.733.733 0 0 1 1.047 0l3.052 3.093 5.4-6.425a.247.247 0 0 1 .02-.022Z\"/></svg></span></div></div>",
+                "extraMarkup": "<div class=\"absolute top-1/2 end-3 -translate-y-1/2\"><svg class=\"shrink-0 size-3.5 text-muted-foreground-1\" xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"m7 15 5 5 5-5\"/><path d=\"m7 9 5-5 5 5\"/></svg></div>",
             }));
         }
 
@@ -505,6 +505,15 @@ async function loadGenres() {
             // Show the default placeholder in the blacklist dropdown (before artists are loaded).
             // Must run after HSSelect autoInit so the dropdown panel exists.
             showBlacklistPlaceholder();
+
+            // Keep the blacklist toggle text color in sync with the current selection.
+            // The native select fires 'change' whenever HSSelect updates the selection.
+            const blacklistSelect = document.getElementById('genre-blacklist-select');
+            if (blacklistSelect && !blacklistSelect.dataset.colorSyncAttached) {
+                blacklistSelect.dataset.colorSyncAttached = 'true';
+                blacklistSelect.addEventListener('change', syncBlacklistToggleColor);
+            }
+            syncBlacklistToggleColor();
         }
     } catch (error) {
         console.error('Error loading genres:', error);
@@ -519,6 +528,12 @@ function handleGenreSelection(e) {
     // Reset blacklist artists and show placeholder whenever genre selection changes
     blacklistArtistsLoaded = false;
     showBlacklistPlaceholder();
+    // Clear any selected artists and reset the toggle text color to gray
+    const blacklistSelect = document.getElementById('genre-blacklist-select');
+    if (blacklistSelect) {
+        Array.from(blacklistSelect.options).forEach(opt => { opt.selected = false; });
+    }
+    syncBlacklistToggleColor();
     const submitBtn = document.getElementById('create-genre-playlist-btn');
 
     if (selectedGenres.length > 0) {
@@ -628,6 +643,17 @@ async function loadBlacklistArtists(force = false) {
         if (fetchBtn) fetchBtn.classList.remove('hidden');
         if (fetchSpinner) fetchSpinner.classList.add('hidden');
     }
+}
+
+// Toggle the blacklist filter's toggle text color (gray -> black) based on
+// whether any artist is currently selected. The HSSelect toggle is rebuilt on
+// every re-init, so we re-apply the class each time it changes.
+function syncBlacklistToggleColor() {
+    const blacklistSelect = document.getElementById('genre-blacklist-select');
+    if (!blacklistSelect) return;
+    const hasSelection = Array.from(blacklistSelect.options).some(opt => opt.selected);
+    const toggle = blacklistSelect.closest('.hs-select')?.querySelector('.blacklist-toggle');
+    if (toggle) toggle.classList.toggle('has-value', hasSelection);
 }
 
 // Load libraries and populate the multi-select interface
