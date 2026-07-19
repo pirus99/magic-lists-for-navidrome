@@ -1,7 +1,5 @@
 import httpx
-import os
 import json
-from json_minify import json_minify
 import re
 from typing import List, Dict, Any, Union, Tuple, Optional
 from .recipe_manager import recipe_manager
@@ -181,9 +179,12 @@ def parse_ai_track_response(content: str) -> Tuple[List[int], str]:
     raise ValueError("Could not extract track_ids from AI response")
 
 
-def clean_prompt(prompt):
-    prompt = json_minify(prompt)
-    return prompt.strip()
+# Maximum factor by which the AI may over-return tracks relative to the requested
+# count. Responses returning more than this multiple are treated as malformed and
+# trigger the algorithmic fallback. Responses within the limit are trimmed to the
+# exact requested length.
+MAX_OVER_RETURN_FACTOR = 2.0
+
 
 class AIClient:
     """Client for AI-powered track curation using configurable providers"""
@@ -320,16 +321,11 @@ class AIClient:
                     indexed_tracks.append(indexed_track)
 
                 print(f"🔢 Using index-based approach for {len(track_id_map)} tracks")
-
-                # Minimal payload for "This Is" - only essential data
-                # Clean the tracks list to save tokens
-                candidate_tracks_str = json.dumps(indexed_tracks, separators=(',', ':'), ensure_ascii=False)
-                cleaned_tracks = clean_prompt(candidate_tracks_str)
                 
                 user_content = (
                     f"Select up to {num_tracks} tracks for a 'This Is {artist_name}' playlist.\n"
                     f"If fewer than {num_tracks} tracks are available, select all available tracks.\n"
-                    f"Tracks: {cleaned_tracks}\nReturn JSON: {{'track_ids': [indices]}}"
+                    f"Tracks: {indexed_tracks}\nReturn JSON: {{'track_ids': [indices]}}"
                 ) 
 
             else:
@@ -375,6 +371,12 @@ class AIClient:
                 track_ids, _description = parse_ai_track_response(content)
 
                 print(f"✅ AI returned {len(track_ids)} tracks (requested: {num_tracks}), validation passed")
+
+                # Reject responses that return far more than requested (>2x) as malformed
+                max_allowed = int(num_tracks * MAX_OVER_RETURN_FACTOR)
+                if len(track_ids) > max_allowed:
+                    print(f"❌ AI returned {len(track_ids)} tracks, more than {MAX_OVER_RETURN_FACTOR}x requested {num_tracks}")
+                    raise ValueError(f"AI response validation failed: Too many tracks returned ({len(track_ids)} vs max {max_allowed})")
 
                 # INDEX-BASED: Map indices back to actual track IDs
                 invalid_indices = [idx for idx in track_ids if idx < 0 or idx >= len(track_id_map)]
@@ -519,14 +521,9 @@ class AIClient:
                 max_tokens = llm_config.get("max_output_tokens", 1500)
 
                 print(f"🤖 Using AI model: {model} (from {self.provider.provider_type} provider)")
-
-                # Minimal payload for re-discover - only essential data
-                # Clean the tracks list to save tokens
-                candidate_tracks_str = json.dumps(indexed_tracks, separators=(',', ':'), ensure_ascii=False)
-                cleaned_tracks = clean_prompt(candidate_tracks_str)
                 
                 user_content = f"""Select {num_tracks} tracks for a Re-Discover Weekly playlist.
-                Tracks: {cleaned_tracks}
+                Tracks: {indexed_tracks}
                 Return JSON: {{"track_ids": [indices], "description": "summary"}}"""
 
                 print(f"📤 Phase 2 AI Payload (first 500 chars): {user_content[:500]}...")
@@ -777,10 +774,10 @@ class AIClient:
                     raise ValueError("AI response validation failed: No tracks returned")
 
                 # Check 2: Reasonable upper bound
-                max_reasonable = int(num_tracks * 1.5)  # Allow up to 1.5x requested for minor flexibility
+                max_reasonable = int(num_tracks * MAX_OVER_RETURN_FACTOR)  # Allow up to 2x requested for flexibility
                 if returned_track_count > max_reasonable:
-                    print(f"❌ AI returned {returned_track_count} tracks, much more than requested {num_tracks}")
-                    raise ValueError(f"AI response validation failed: Too many tracks returned ({returned_track_count} vs requested {num_tracks})")
+                    print(f"❌ AI returned {returned_track_count} tracks, more than {MAX_OVER_RETURN_FACTOR}x requested {num_tracks}")
+                    raise ValueError(f"AI response validation failed: Too many tracks returned ({returned_track_count} vs max {max_reasonable})")
 
                 # Check 3: Validate tracks are within source bounds
                 source_track_count = len(candidate_tracks)
@@ -800,6 +797,9 @@ class AIClient:
                 valid_indices = [idx for idx in track_ids if 0 <= idx < len(track_id_map)]
                 mapped_track_ids = [track_id_map[idx] for idx in valid_indices]
                 # Mapped indices to track IDs
+
+                # Trim to the exact requested length (AI may return up to 2x)
+                mapped_track_ids = mapped_track_ids[:num_tracks]
 
                 final_selection = space_id_track_list_by_artist_and_album(mapped_track_ids, candidate_tracks, artist_spacing=artist_spacing, album_spacing=album_spacing)
 
