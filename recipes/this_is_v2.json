@@ -1,5 +1,5 @@
 {
-  "recipe_id": "This_Is_Artist_v1_009",
+  "recipe_id": "This_Is_Artist_v2",
   "name": "Single Artist Metadata & Play Count Based Playlist",
   "user_parameters": {
     "target_artist": "{{TARGET_ARTIST}}",

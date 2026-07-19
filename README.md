@@ -53,9 +53,10 @@ _Caption: Creating a 'This is (Artist)' playlist_
          - NAVIDROME_USERNAME=your_username
          - NAVIDROME_PASSWORD=your_password
          - DATABASE_PATH=/app/data/magiclists.db # Required: Database location
-           - AI_PROVIDER=openrouter               # Optional: openrouter, groq, google, ollama
-           - AI_API_KEY=your_openrouter_api_key  # Optional, for OpenRouter/Groq/Google
-           - AI_MODEL=meta-llama/llama-3.3-70b-instruct # Optional, for AI providers
+           - AI_PROVIDER=google            # Optional: openrouter, groq, google, ollama
+           - AI_API_KEY=your_google_api_key  # Optional, for OpenRouter/Groq/Google
+           - AI_MODEL=gemini-3.5-flash # Select one from your AI provider
+           - DESCRIPTION_AI_MODEL=gemma-4-26b-a4b-it # Optional, select a smaller model for Playlist descriptions
        volumes:
          - ./magiclists-data:/app/data          # Persist configuration
        restart: unless-stopped
@@ -145,9 +146,10 @@ Use this method if you prefer to run Python directly or want to contribute to de
    NAVIDROME_USERNAME=your_username
    NAVIDROME_PASSWORD=your_password
     DATABASE_PATH=./magiclists.db        # Required: Database location
-    AI_PROVIDER=openrouter              # Optional: openrouter, groq, google, ollama
-    AI_API_KEY=your_openrouter_api_key  # Optional, for OpenRouter/Groq/Google
-    AI_MODEL=meta-llama/llama-3.3-70b-instruct # Optional, for AI providers
+    AI_PROVIDER=google              # Optional: openrouter, groq, google, ollama
+    AI_API_KEY=your_google_ai_studio_api_key  # for OpenRouter/Groq/Google
+    AI_MODEL=gemini-3.5-flash # Use a high tier Instruct or low tier Reasoning model for best results
+    DESCRIPTION_AI_MODEL=gemma-4-26b-a4b-it # Optional
 ```
 5. Run the application:
 ```bash
@@ -199,6 +201,19 @@ Can't connect to Navidrome? The most common issue is an incorrect `NAVIDROME_URL
 
 **Still having issues?** Check the System Check page in the app after startup - it will test your connection and provide specific guidance.
 
+### Ai Response Issues
+
+If Ai is responding with its reasoning or gives empty responses:
+- Try another Model
+- Try selecting a shorter Playlist length
+then try:
+1. To add a Volume Mount for recipes in Docker Container
+```bash
+   volumes:
+      - HOST_PATH_FOR_YOUR_RECIPES:/app/recipes
+```
+2. Edit the maximum Tokens for the required Recipe, or vary with model temperature till you get good results.
+**More Info:** See [README](recipes/README.md) in recipes folder
 
 ## System Check Page 
 
@@ -216,11 +231,19 @@ If checks fail, detailed suggestions are provided to help resolve issues. You ca
 ## API Endpoints
 
 - `GET /` - Web interface
+- `GET /system-check` - System check / health diagnostics page
 - `GET /api/artists` - List all artists from Navidrome
+- `GET /api/genres` - List all genres from Navidrome
+- `GET /api/artists-by-genre` - List artists for a given genre
+- `GET /api/music-folders` - List available music folders/libraries
+- `GET /api/health-check` - Run system health checks (returns JSON status)
 - `POST /api/create_playlist` - Create a new "This Is" playlist
-- `POST /api/create_playlist_with_reasoning` - Create playlist with detailed reasoning
+- `POST /api/create_playlist_with_description` - Create playlist with an AI-generated description
+- `POST /api/create_genre_playlist` - Create a curated genre mix playlist
 - `GET /api/rediscover-weekly` - Generate Re-Discover Weekly recommendations
+- `GET /api/rediscover-weekly-v2` - Generate Re-Discover Weekly recommendations (v2)
 - `POST /api/create-rediscover-playlist` - Create Re-Discover Weekly playlist in Navidrome
+- `POST /api/create-rediscover-playlist-v2` - Create Re-Discover Weekly playlist in Navidrome (v2)
 - `GET /api/playlists` - List all managed playlists
 - `DELETE /api/playlists/{playlist_id}` - Delete a managed playlist
 - `GET /api/recipes` - List available recipe versions
@@ -228,9 +251,11 @@ If checks fail, detailed suggestions are provided to help resolve issues. You ca
 - `GET /api/scheduler/status` - Check auto-refresh scheduler status
 - `POST /api/scheduler/trigger` - Manually trigger scheduled refreshes
 - `POST /api/scheduler/start` - Start the auto-refresh scheduler
+- `GET /api/ai-model-info` - Get information about the configured AI model
+- `POST /api/track-library-size` - Get the size of the track library
 
 
-## AI Configuration (Optional)
+## AI Configuration
 
 MagicLists supports multiple AI providers for enhanced playlist curation:
 
@@ -245,13 +270,14 @@ MagicLists supports multiple AI providers for enhanced playlist curation:
 
 ```bash
 # Install and run a model
-ollama pull llama3.2
+ollama pull llamusic
 ollama serve
 
 # .env configuration
 AI_PROVIDER=ollama
-AI_MODEL=llama3.2
+AI_MODEL=llamusic
 OLLAMA_BASE_URL=http://localhost:11434/v1/chat/completions
+OLLAMA_MAX_TRACKS=180 #Lower when having ai response problems
 # For Docker: OLLAMA_BASE_URL=http://host.docker.internal:11434/v1/chat/completions
 # OLLAMA_TIMEOUT=300  # Increase for slower CPUs (default: 180 seconds)
 ```
@@ -263,8 +289,9 @@ Get an API key from [OpenRouter](https://openrouter.ai) ($5 minimum):
 # .env configuration
 AI_PROVIDER=openrouter
 AI_API_KEY=sk-or-v1-your-key-here
-AI_MODEL=deepseek/deepseek-chat         # Free model
-# AI_MODEL=anthropic/claude-3-haiku     # Paid model
+AI_MODEL=poolside/laguna-xs-2.1:free    # Free model
+# AI_MODEL=tencent/hy3                  # Paid model
+DESCRIPTION_AI_MODEL=google/gemma-4-26b-a4b-it:free
 ```
 
 ### Option 4: Google AI (Free & Generous Quota)
@@ -274,8 +301,9 @@ Get a free API key from [Google AI Studio](https://ai.google.dev/) - no credit c
 # .env configuration
 AI_PROVIDER=google
 AI_API_KEY=AIzaSy_your-google-key-here
-AI_MODEL=gemini-2.5-flash               # Fast and capable
-# AI_MODEL=gemini-1.5-pro               # More advanced model
+AI_MODEL=gemini-3.5-flash               # Fast and capable
+# AI_MODEL=gemini-3.1-pro               # More advanced model
+DESCRIPTION_AI_MODEL=gemma-4-26b-a4b-it
 ```
 
 ### Option 5: Groq (Free/Paid)
@@ -285,8 +313,9 @@ Get a free API key from [Groq](https://console.groq.com/) - no credit card requi
 # .env configuration
 AI_PROVIDER=groq
 AI_API_KEY=gsk_your-groq-key-here
-AI_MODEL=llama-3.1-8b-instant           # Fast default model
-# AI_MODEL=mixtral-8x7b-32768           # Alternative model
+AI_MODEL=openai/gpt-oss-20b             # Fast default model
+# AI_MODEL=llama-3.3-70b-versatile      # Alternative model
+DESCRIPTION_AI_MODEL=llama-3.1-8b-instant
 ```
 
 **Note:** Without AI configuration, the app falls back to play-count based playlist generation.
